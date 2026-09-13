@@ -7,7 +7,9 @@ from uuid import uuid4
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from backend.models.actions import ActionCall, ActionProposal
+from backend.models.attachments import EvidenceAttachment
 from backend.models.events import AgentEvent
+from backend.models.evidence import ClaimAssessment
 from backend.models.tools import ToolCall, ToolResult
 
 AgentStatus = Literal[
@@ -50,6 +52,10 @@ class CustomerCase(BaseModel):
     unresolved_issues: list[str] = Field(default_factory=list)
     escalation_reason: str | None = None
     final_resolution: str | None = None
+
+    # Attachments & Multimodal Claim Validation
+    attachments: list[EvidenceAttachment] = Field(default_factory=list)
+    claim_assessment: ClaimAssessment | None = None
 
     # Explicit Adaptation Tracking
     adaptation_count: int = 0
@@ -101,6 +107,19 @@ class AgentState(BaseModel):
     final_result: FinalResult | None = None
     started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     step_count: int = 0
+
+    # Attachments & Multimodal Claim Validation
+    attachments: list[EvidenceAttachment] = Field(default_factory=list)
+    claim_assessment: ClaimAssessment | None = None
+
+    # Explicit Decision Source & LLM Provider Tracking
+    decision_source: Literal["GROQ_LLM", "RULE_BASED_FALLBACK"] = "RULE_BASED_FALLBACK"
+    llm_provider: str | None = None
+    llm_model: str | None = None
+    llm_success: bool = False
+    fallback_reason: str | None = None
+    latency_ms: float | None = None
+    decision_timestamp: datetime | None = None
 
     # Explicit Adaptation Tracking
     adaptation_required: bool = False

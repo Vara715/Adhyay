@@ -12,6 +12,8 @@ interface HeaderProps {
   systemHealth: { status: string } | null;
   onOpenLlmSettings: () => void;
   hasActiveRun: boolean;
+  isPresentationMode: boolean;
+  onTogglePresentationMode: () => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -21,17 +23,24 @@ export const Header: React.FC<HeaderProps> = ({
   systemHealth,
   onOpenLlmSettings,
   hasActiveRun,
+  isPresentationMode,
+  onTogglePresentationMode,
 }) => {
   const getLlmStatusDotColor = () => {
     if (llmConfig.connection_status === "error") return "#ef4444";
-    if (llmConfig.is_configured) return "#22c55e";
+    if (llmConfig.is_configured && llmConfig.connection_status === "ok") return "#22c55e";
+    if (llmConfig.is_configured) return "#3b82f6";
     return "#eab308";
   };
 
   const getLlmStatusText = () => {
-    if (llmConfig.connection_status === "error") return `LLM: Error (Fallback)`;
-    if (llmConfig.is_configured) return `LLM: ${llmConfig.provider}/${llmConfig.model}`;
-    return "LLM: Rule-Based Mode";
+    if (llmConfig.connection_status === "error") return "CONNECTION ERROR";
+    if (llmConfig.is_configured) {
+      const p = (llmConfig.provider || "LLM").toUpperCase();
+      const m = llmConfig.model ? ` (${llmConfig.model})` : "";
+      return `CONNECTED — ${p}${m}`;
+    }
+    return "RULE-BASED FALLBACK";
   };
 
   return (
@@ -63,6 +72,14 @@ export const Header: React.FC<HeaderProps> = ({
       </nav>
 
       <div className="header-status-group">
+        <button
+          type="button"
+          className={`presentation-toggle-btn ${isPresentationMode ? "active" : ""}`}
+          onClick={onTogglePresentationMode}
+          title="Toggle wide presentation view for judge demonstrations"
+        >
+          📺 {isPresentationMode ? "Normal View" : "Presentation View"}
+        </button>
         <button
           type="button"
           className="status-pill cursor-pointer"

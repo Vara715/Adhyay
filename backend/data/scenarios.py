@@ -62,33 +62,74 @@ def _base_data() -> dict[str, Any]:
         "products": [
             {
                 "product_id": "PR-100",
+                "sku": "SKU-NIMBUS-100",
                 "name": "Nimbus Wireless Headphones",
+                "brand": "Nimbus",
+                "model": "P1-Pro",
                 "category": "Electronics",
                 "unit_price": 2_499,
                 "units_sold_current": 38,
                 "units_sold_previous": 40,
                 "revenue_current": 94_962,
                 "revenue_change_percent": -5.0,
+                "specifications": "Bluetooth 5.2, Active Noise Cancellation, 30hr battery",
             },
             {
                 "product_id": "PR-200",
+                "sku": "SKU-ATLAS-200",
                 "name": "Atlas Laptop Stand",
+                "brand": "Atlas",
+                "model": "P2-Stand",
                 "category": "Accessories",
                 "unit_price": 1_499,
                 "units_sold_current": 16,
                 "units_sold_previous": 15,
                 "revenue_current": 23_984,
                 "revenue_change_percent": 6.7,
+                "specifications": "Aluminum Alloy, Ergonomic Adjustable Height, 15-inch max",
             },
             {
                 "product_id": "PR-300",
+                "sku": "SKU-ORBIT-300",
                 "name": "Orbit USB-C Hub",
+                "brand": "Orbit",
+                "model": "P3-Hub",
                 "category": "Accessories",
                 "unit_price": 1_299,
                 "units_sold_current": 12,
                 "units_sold_previous": 13,
                 "revenue_current": 15_588,
                 "revenue_change_percent": -7.7,
+                "specifications": "7-in-1 Multiport Adapter, 100W PD Pass-through, HDMI 4K",
+            },
+        ],
+        "shipments": [
+            {
+                "shipment_id": "SH-9001",
+                "order_id": "ORD-9001",
+                "tracking_number": "TRK-88101",
+                "carrier": "ExpressLogistics",
+                "status": "delivered",
+                "dispatch_date": "2026-09-08",
+                "delivery_date": "2026-09-10",
+            },
+            {
+                "shipment_id": "SH-9002",
+                "order_id": "ORD-9002",
+                "tracking_number": "TRK-88102",
+                "carrier": "ExpressLogistics",
+                "status": "delivered",
+                "dispatch_date": "2026-09-09",
+                "delivery_date": "2026-09-11",
+            },
+            {
+                "shipment_id": "SH-9004",
+                "order_id": "ORD-9004",
+                "tracking_number": "TRK-88104",
+                "carrier": "ExpressLogistics",
+                "status": "in_transit",
+                "dispatch_date": "2026-09-07",
+                "delivery_date": "2026-09-12",
             },
         ],
         "inventory": [
@@ -300,6 +341,36 @@ def _base_data() -> dict[str, Any]:
                 "message": "Payment authorization completed in 410ms.",
             },
         ],
+        "case_logs": [
+            {
+                "timestamp": "2026-09-10T09:30:00Z",
+                "order_id": "ORD-9005",
+                "customer_id": "CUST-804",
+                "log_type": "warehouse_packing",
+                "message": "Warehouse barcode scan matched item: Phone 2 (P2-X) packed into box for Order ORD-9005. Mismatch detected with order manifest Phone 1.",
+            },
+            {
+                "timestamp": "2026-09-10T11:15:00Z",
+                "order_id": "ORD-9005",
+                "customer_id": "CUST-804",
+                "log_type": "shipping_scan",
+                "message": "Courier dispatch scan: Package tracking TRK-88102 departed warehouse hub.",
+            },
+            {
+                "timestamp": "2026-09-09T14:20:00Z",
+                "order_id": "ORD-9002",
+                "customer_id": "CUST-801",
+                "log_type": "warehouse_packing",
+                "message": "Warehouse barcode scan matched item: Atlas Laptop Stand (PR-200) packed for Order ORD-9002.",
+            },
+            {
+                "timestamp": "2026-09-09T16:05:00Z",
+                "order_id": "ORD-9002",
+                "customer_id": "CUST-801",
+                "log_type": "shipping_scan",
+                "message": "Express courier note: Outer container suffered severe box crush during transit.",
+            },
+        ],
     }
 
 
@@ -428,6 +499,57 @@ def _customer_investigation_tool_failure_adapts() -> ScenarioDefinition:
     )
 
 
+def _customer_wrong_product_received() -> ScenarioDefinition:
+    data = _base_data()
+    return ScenarioDefinition(
+        key="customer_wrong_product_received",
+        name="Customer wrong product received (Multimodal Supported)",
+        description="Customer ordered Phone 1 but received Phone 2. Attachment image and warehouse packing logs confirm mismatch. Claim status: SUPPORTED.",
+        data=data,
+    )
+
+
+def _customer_inconclusive_image_log_lookup() -> ScenarioDefinition:
+    data = _base_data()
+    return ScenarioDefinition(
+        key="customer_inconclusive_image_log_lookup",
+        name="Customer unreadable image evidence (Inconclusive)",
+        description="Customer uploaded a blurry image. Attachment extraction marks EVIDENCE_INCONCLUSIVE. Agent investigates logs without inventing details.",
+        data=data,
+    )
+
+
+def _customer_wrong_product_stockout_adapts() -> ScenarioDefinition:
+    data = _base_data()
+    data["inventory"][0].update(on_hand=0, reserved=0)
+    return ScenarioDefinition(
+        key="customer_wrong_product_stockout_adapts",
+        name="Wrong product received with replacement stockout",
+        description="Customer claim is SUPPORTED, but replacement stock is unavailable. The agent dynamically adapts to issue a refund.",
+        data=data,
+    )
+
+
+def _customer_claim_contradicted() -> ScenarioDefinition:
+    data = _base_data()
+    return ScenarioDefinition(
+        key="customer_claim_contradicted",
+        name="Customer claim contradicted by photo and log evidence",
+        description="Customer claims wrong item, but uploaded image and factory packing scans confirm correct item. Claim status: CONTRADICTED.",
+        data=data,
+    )
+
+
+def _customer_ownership_mismatch_escalates() -> ScenarioDefinition:
+    data = _base_data()
+    return ScenarioDefinition(
+        key="customer_ownership_mismatch_escalates",
+        name="Customer order ownership mismatch (Security Escalation)",
+        description="Customer CUST-801 attempts to query or claim resolution for order ORD-9004 belonging to CUST-803. System detects security mismatch and escalates safely.",
+        data=data,
+    )
+
+
 SCENARIOS: dict[str, ScenarioDefinition] = {
     scenario.key: scenario
     for scenario in (
@@ -439,6 +561,11 @@ SCENARIOS: dict[str, ScenarioDefinition] = {
         _customer_replacement_out_of_stock_adapts_refund(),
         _customer_refund_denied_policy_escalation(),
         _customer_investigation_tool_failure_adapts(),
+        _customer_wrong_product_received(),
+        _customer_inconclusive_image_log_lookup(),
+        _customer_wrong_product_stockout_adapts(),
+        _customer_claim_contradicted(),
+        _customer_ownership_mismatch_escalates(),
     )
 }
 

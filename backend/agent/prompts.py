@@ -42,10 +42,21 @@ def build_decision_request(state: AgentState, tools: list[ToolMetadata]) -> LLMR
     ]
     verification_notes = list(state.verification_notes[-5:])
 
+    attachments_summary = [
+        f"{a.filename} ({a.file_type}): status={a.status}, extracted={a.extracted_text or 'none'}"
+        for a in (state.attachments or [])
+    ]
+    claim_info = "none"
+    if state.claim_assessment:
+        ca = state.claim_assessment
+        claim_info = f"Status: {ca.claim_status} | Reason: {ca.reason} | Summary: {ca.auditable_summary}"
+
     content = (
         f"Original Customer Goal: {state.original_goal}\n"
         f"Current Objective: {state.current_objective}\n"
         f"Current Hypothesis: {state.current_hypothesis}\n"
+        f"Claim Assessment: {claim_info}\n"
+        f"Attachments Evidence: {attachments_summary or ['none']}\n"
         f"Adaptation Required: {state.adaptation_required}\n"
         f"Adaptation Count: {state.adaptation_count}\n"
         f"Previous Plan: {state.previous_plan or 'none'}\n"

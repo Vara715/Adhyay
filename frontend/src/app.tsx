@@ -23,6 +23,10 @@ const DEFAULT_GOALS: Record<string, string> = {
   customer_damaged_replacement_available: "My laptop stand arrived damaged in order ORD-9002. I want a replacement.",
   customer_replacement_out_of_stock_adapts_refund: "My product in order ORD-9003 arrived defective. Please replace it.",
   customer_refund_denied_policy_escalation: "I want to cancel my order ORD-9004 because I no longer need it.",
+  customer_wrong_product_received: "I ordered Phone 1 but received Phone 2 in order ORD-9001. I want the correct phone.",
+  customer_wrong_product_stockout_adapts: "I ordered Phone 1 but received Phone 2 in order ORD-9001. I want a replacement.",
+  customer_inconclusive_image_log_lookup: "My product arrived damaged in order ORD-9001.",
+  customer_ownership_mismatch_escalates: "Check resolution options for order ORD-9004 for customer CUST-801.",
   customer_investigation_tool_failure_adapts: "My product in order ORD-9001 arrived defective and I need help.",
 
   // Operational Scenarios
@@ -127,7 +131,7 @@ export default function App() {
     return () => clearInterval(interval);
   }, [activeRunId]);
 
-  const createCustomerCase = async () => {
+  const createCustomerCase = async (attachmentFiles?: File[]) => {
     if (!goal.trim()) {
       setErrorMsg("Provide a non-empty customer resolution goal.");
       return;
@@ -151,7 +155,28 @@ export default function App() {
         throw new Error(err.detail || "Failed to create customer case");
       }
       const data = await res.json();
-      setCurrentRun(data);
+
+      const caseId = data.customer_case?.case_id;
+      if (caseId && attachmentFiles && attachmentFiles.length > 0) {
+        for (const file of attachmentFiles) {
+          const fileFormData = new FormData();
+          fileFormData.append("file", file);
+          await fetch(`${API_BASE}/cases/${caseId}/attachments`, {
+            method: "POST",
+            body: fileFormData,
+          });
+        }
+        const runRes = await fetch(`${API_BASE}/runs/${data.run_id}`);
+        if (runRes.ok) {
+          const updatedRun = await runRes.json();
+          setCurrentRun(updatedRun);
+        } else {
+          setCurrentRun(data);
+        }
+      } else {
+        setCurrentRun(data);
+      }
+
       setActiveRunId(data.run_id);
       setRuns((prev) => [data, ...prev.filter((r) => r.run_id !== data.run_id)]);
       setActiveView("workspace");
@@ -162,11 +187,13 @@ export default function App() {
     }
   };
 
-  const startRunExecution = async (runId: string) => {
+  const startRunExecution = async (runId?: string) => {
+    const targetRunId = runId || activeRunId;
+    if (!targetRunId) return;
     setLoading(true);
     setErrorMsg(null);
     try {
-      const res = await fetch(`${API_BASE}/runs/${runId}/start`, {
+      const res = await fetch(`${API_BASE}/runs/${targetRunId}/start`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ step_delay_seconds: 0.6 }),
@@ -186,19 +213,28 @@ export default function App() {
     }
   };
 
-  const selectRunForWorkspace = (runId: string) => {
+  const selectRunForWorkspace = async (runId: string) => {
     setActiveRunId(runId);
-    const found = runs.find((r) => r.run_id === runId);
-    if (found) setCurrentRun(found);
-    setActiveView("workspace");
+    setLoading(true);
+    try {
+      const res = await fetch(`${API_BASE}/runs/${runId}`);
+      if (!res.ok) throw new Error("Failed to fetch run details.");
+      const data = await res.json();
+      setCurrentRun(data);
+      setActiveView("workspace");
+    } catch (err: any) {
+      setErrorMsg("Unable to open workspace for selected case.");
+    } finally {
+      setLoading(false);
+    }
   };
 
   const submitApproval = async (approved: boolean) => {
-    if (!currentRun) return;
+    if (!activeRunId) return;
     setLoading(true);
     setErrorMsg(null);
     try {
-      const res = await fetch(`${API_BASE}/runs/${currentRun.run_id}/approval`, {
+      const res = await fetch(`${API_BASE}/runs/${activeRunId}/approval`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ approved, step_delay_seconds: 0.6 }),
@@ -261,8 +297,10 @@ export default function App() {
     }
   };
 
+  const [isPresentationMode, setIsPresentationMode] = useState<boolean>(false);
+
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${isPresentationMode ? "presentation-mode" : ""}`}>
       {/* Header Bar */}
       <Header
         activeView={activeView}
@@ -271,6 +309,8 @@ export default function App() {
         systemHealth={systemHealth}
         onOpenLlmSettings={() => setShowLlmDrawer(true)}
         hasActiveRun={Boolean(currentRun && currentRun.status === "running")}
+        isPresentationMode={isPresentationMode}
+        onTogglePresentationMode={() => setIsPresentationMode(!isPresentationMode)}
       />
 
       {/* Main Content Area */}

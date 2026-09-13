@@ -17,7 +17,9 @@ from backend.tools.customer import (
     GetProductDetailsTool,
 )
 from backend.tools.inventory import InventoryStatusTool
+from backend.tools.logs import SearchCaseLogsTool
 from backend.tools.payments import PaymentStatusTool
+from backend.tools.product import GetProductTool
 from backend.tools.suppliers import SupplierStatusTool
 from backend.tools.technical import RecentDeploymentsTool, ServiceHealthTool, SystemLogsTool
 
@@ -33,6 +35,7 @@ class ToolRegistry:
             # PS5 Customer Investigation Tools
             GetCustomerTool(), GetOrderTool(), GetCustomerOrdersTool(), GetProductDetailsTool(),
             GetPolicyTool(), CheckResolutionEligibilityTool(), GetCustomerInventoryTool(),
+            SearchCaseLogsTool(), GetProductTool(),
         ]
         self._repository = repository
         self._tools = {tool.name: tool for tool in tools}

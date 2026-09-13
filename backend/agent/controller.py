@@ -172,19 +172,86 @@ class AgentController:
                 state.customer_case.evidence = [item.fact for item in state.evidence]
                 state.customer_case.actions = list(state.actions)
 
+                # Multimodal Evidence & Claim Assessment Initialization
+                if not state.claim_assessment:
+                    from backend.api.cases import get_case_attachments
+                    from backend.services.claim_validator import ClaimValidator
+
+                    case_id = state.customer_case.case_id
+                    attachments = get_case_attachments(case_id) or state.customer_case.attachments or []
+                    if attachments:
+                        state.attachments = attachments
+                        state.customer_case.attachments = attachments
+                        record_event(state, "evidence_attached", f"Attached {len(attachments)} evidence document(s)/photo(s) to case {case_id}.")
+
+                    order_data = {"order_id": state.customer_case.order_id} if state.customer_case.order_id else None
+                    assessment = ClaimValidator.evaluate_claim(
+                        goal=state.original_goal,
+                        order_data=order_data,
+                        attachments=state.attachments,
+                    )
+                    state.claim_assessment = assessment
+                    state.customer_case.claim_assessment = assessment
+                    record_event(
+                        state, "claim_assessed",
+                        f"Claim Assessment: {assessment.claim_status} — {assessment.reason}",
+                    )
+
         while state.step_count < self._max_steps:
             if monotonic() - started > self._timeout_seconds:
                 with guard:
                     return self._stop(state, "timed_out", "Investigation stopped because the configured time limit was reached.")
+            
+            from datetime import datetime, timezone
+            from backend.config import get_settings
+            from backend.agent.decisions import LLMDecisionProvider, EvidenceBasedDecisionProvider
+
+            start_t = monotonic()
+            is_llm_attempt = isinstance(self._decision_provider, LLMDecisionProvider)
+            settings = get_settings()
+
             try:
                 raw_decision = self._decision_provider.decide(state, self._available_tools())
                 decision = raw_decision if isinstance(raw_decision, AgentDecision) else AgentDecision.model_validate(raw_decision)
+                elapsed_ms = (monotonic() - start_t) * 1000.0
+
+                if is_llm_attempt:
+                    state.decision_source = "GROQ_LLM"
+                    state.llm_provider = settings.llm_provider or "Groq"
+                    state.llm_model = settings.llm_model or "llama-3.3-70b-versatile"
+                    state.llm_success = True
+                    state.fallback_reason = None
+                    state.latency_ms = round(elapsed_ms, 2)
+                    state.decision_timestamp = datetime.now(timezone.utc)
+                else:
+                    state.decision_source = "RULE_BASED_FALLBACK"
+                    state.llm_provider = "Rule-Based Fallback"
+                    state.llm_model = settings.llm_model
+                    state.llm_success = False
+                    if not state.fallback_reason:
+                        state.fallback_reason = settings.llm_configuration_message or "Running in deterministic rule-based mode."
+                    state.latency_ms = round(elapsed_ms, 2)
+                    state.decision_timestamp = datetime.now(timezone.utc)
             except (ValidationError, TypeError, ValueError, LLMProviderError) as error:
-                from backend.agent.decisions import LLMDecisionProvider, EvidenceBasedDecisionProvider
-                if isinstance(self._decision_provider, LLMDecisionProvider):
+                elapsed_ms = (monotonic() - start_t) * 1000.0
+                safe_err = str(error)
+                if settings.llm_api_key:
+                    sec = settings.llm_api_key.get_secret_value()
+                    if sec and len(sec) > 4:
+                        safe_err = safe_err.replace(sec, "[REDACTED]")
+
+                state.decision_source = "RULE_BASED_FALLBACK"
+                state.llm_provider = "Rule-Based Fallback"
+                state.llm_model = settings.llm_model
+                state.llm_success = False
+                state.fallback_reason = safe_err
+                state.latency_ms = round(elapsed_ms, 2)
+                state.decision_timestamp = datetime.now(timezone.utc)
+
+                if is_llm_attempt:
                     record_event(
                         state, "adaptation",
-                        f"LLM decision provider encountered an issue ({error}). Falling back to rule-based decision engine.",
+                        f"LLM decision provider issue ({safe_err}). Falling back to rule-based decision engine.",
                         None,
                     )
                     self._decision_provider = EvidenceBasedDecisionProvider()
@@ -192,13 +259,27 @@ class AgentController:
                     decision = raw_decision if isinstance(raw_decision, AgentDecision) else AgentDecision.model_validate(raw_decision)
                 else:
                     with guard:
-                        return self._stop(state, "failed", f"Malformed decision response: {error}")
+                        return self._stop(state, "failed", f"Malformed decision response: {safe_err}")
             except Exception as error:
-                from backend.agent.decisions import LLMDecisionProvider, EvidenceBasedDecisionProvider
-                if isinstance(self._decision_provider, LLMDecisionProvider):
+                elapsed_ms = (monotonic() - start_t) * 1000.0
+                safe_err = str(error)
+                if settings.llm_api_key:
+                    sec = settings.llm_api_key.get_secret_value()
+                    if sec and len(sec) > 4:
+                        safe_err = safe_err.replace(sec, "[REDACTED]")
+
+                state.decision_source = "RULE_BASED_FALLBACK"
+                state.llm_provider = "Rule-Based Fallback"
+                state.llm_model = settings.llm_model
+                state.llm_success = False
+                state.fallback_reason = safe_err
+                state.latency_ms = round(elapsed_ms, 2)
+                state.decision_timestamp = datetime.now(timezone.utc)
+
+                if is_llm_attempt:
                     record_event(
                         state, "adaptation",
-                        f"LLM decision provider error ({error}). Falling back to rule-based decision engine.",
+                        f"LLM decision provider error ({safe_err}). Falling back to rule-based decision engine.",
                         None,
                     )
                     self._decision_provider = EvidenceBasedDecisionProvider()
@@ -206,7 +287,7 @@ class AgentController:
                     decision = raw_decision if isinstance(raw_decision, AgentDecision) else AgentDecision.model_validate(raw_decision)
                 else:
                     with guard:
-                        return self._stop(state, "failed", f"The investigation decision provider failed unexpectedly: {error}")
+                        return self._stop(state, "failed", f"The investigation decision provider failed unexpectedly: {safe_err}")
 
             if monotonic() - started > self._timeout_seconds:
                 with guard:
@@ -230,14 +311,14 @@ class AgentController:
                 else:
                     self._record_adaptation_if_needed(state, decision)
 
-                from backend.agent.decisions import LLMDecisionProvider
-                is_llm = isinstance(self._decision_provider, LLMDecisionProvider)
+                is_llm = state.decision_source == "GROQ_LLM"
                 event_type = "llm_decision" if is_llm else "decision"
                 prefix = "LLM selected" if is_llm else "Rule-based policy selected"
                 record_event(state, event_type, f"{prefix} {target_name or 'completion'}: {decision.reasoning}", target_name)
                 state.current_objective = decision.current_objective
                 state.current_hypothesis = decision.hypothesis
                 if decision.hypothesis != prior_hypothesis:
+
                     record_event(state, "hypothesis_update", f"Hypothesis updated: {decision.hypothesis}")
                     state.evidence.append(EvidenceItem(source="Agent Reasoning", fact=decision.hypothesis, kind="hypothesis"))
 

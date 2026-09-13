@@ -39,7 +39,7 @@ interface CaseQueueViewProps {
   setGoal: (g: string) => void;
   threshold: string;
   setThreshold: (t: string) => void;
-  onStartRun: () => void;
+  onStartRun: (files?: File[]) => void;
   onSelectRun: (runId: string) => void;
   loading: boolean;
 }
@@ -58,6 +58,7 @@ export const CaseQueueView: React.FC<CaseQueueViewProps> = ({
   loading,
 }) => {
   const activeScenarioObj = scenarios.find((s) => s.key === selectedScenario);
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([]);
 
   // Compute metrics from active runs
   const totalRuns = runs.length;
@@ -151,6 +152,31 @@ export const CaseQueueView: React.FC<CaseQueueViewProps> = ({
             </div>
           </div>
 
+          <div className="form-group mb-3">
+            <label className="form-label">Evidence Attachments (Optional: Upload Product Photo / Invoice / Receipt)</label>
+            <input
+              className="form-input"
+              type="file"
+              accept=".jpg,.jpeg,.png,.pdf,.txt"
+              multiple
+              onChange={(e) => {
+                if (e.target.files && e.target.files.length > 0) {
+                  setSelectedFiles(Array.from(e.target.files));
+                } else {
+                  setSelectedFiles([]);
+                }
+              }}
+            />
+            {selectedFiles.length > 0 && (
+              <div style={{ marginTop: "0.4rem", color: "#34d399", fontSize: "0.85rem", fontWeight: "bold" }}>
+                ✓ Selected {selectedFiles.length} file(s): {selectedFiles.map((f) => `${f.name} (${(f.size / 1024 / 1024).toFixed(1)} MB)`).join(", ")}
+              </div>
+            )}
+            <span className="form-sub-text muted" style={{ fontSize: "0.8rem", marginTop: "0.25rem", display: "block" }}>
+              Supports JPG, PNG photos, PDF invoices, and receipts (Max 10MB per file).
+            </span>
+          </div>
+
           {activeScenarioObj?.customer_case && (
             <div className="scenario-preview-box">
               <span className="preview-label">Simulation World State Data:</span>
@@ -167,7 +193,7 @@ export const CaseQueueView: React.FC<CaseQueueViewProps> = ({
             <button
               type="button"
               className="btn-enterprise-primary"
-              onClick={onStartRun}
+              onClick={() => onStartRun(selectedFiles)}
               disabled={loading}
             >
               {loading ? "Initializing..." : "Create & Open Case Workspace →"}

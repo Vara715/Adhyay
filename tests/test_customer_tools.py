@@ -14,7 +14,7 @@ class CustomerToolsTests(unittest.TestCase):
 
     def test_tool_registry_includes_all_customer_tools(self) -> None:
         names = self.registry.names
-        self.assertEqual(len(names), 16)
+        self.assertEqual(len(names), 18)
         expected_customer_tools = [
             "get_customer",
             "get_order",

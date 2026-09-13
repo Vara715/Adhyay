@@ -4,6 +4,7 @@ from fastapi import APIRouter
 
 from backend.config import get_settings
 
+from backend.api.cases import router as cases_router
 from backend.api.config_routes import router as config_router
 from backend.api.runs import router as runs_router
 
@@ -24,5 +25,6 @@ def health_check() -> dict[str, object]:
 
 router.include_router(config_router)
 router.include_router(runs_router)
+router.include_router(cases_router)
 
 

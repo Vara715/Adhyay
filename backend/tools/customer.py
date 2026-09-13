@@ -21,6 +21,7 @@ class GetOrderInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     order_id: str = Field(min_length=1, description="Order ID (e.g. ORD-9001)")
+    customer_id: str | None = Field(default=None, description="Optional Customer ID to verify ownership")
 
 
 class GetCustomerOrdersInput(BaseModel):
@@ -49,6 +50,7 @@ class CheckEligibilityInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     order_id: str = Field(min_length=1, description="Order ID to evaluate")
+    customer_id: str | None = Field(default=None, description="Optional Customer ID to verify order ownership")
     resolution_type: Literal["refund", "replacement", "cancellation"] = Field(
         description="Type of resolution requested"
     )
@@ -98,6 +100,15 @@ class GetOrderTool(ReadOnlyTool[GetOrderInput]):
             return ToolResult.failure(
                 self.name, "not_found", f"No customer order found with order_id '{arguments.order_id}'."
             )
+
+        # Security check: Customer-order ownership verification
+        if arguments.customer_id and arguments.customer_id != order.get("customer_id"):
+            return ToolResult.failure(
+                self.name,
+                "ownership_mismatch",
+                f"Access Denied: Order '{arguments.order_id}' does not belong to customer '{arguments.customer_id}' (actual owner: '{order.get('customer_id')}').",
+            )
+
         return ToolResult.success(
             self.name,
             f"Retrieved order {order['order_id']} for customer {order['customer_id']} (Status: {order['status']}).",
@@ -195,6 +206,24 @@ class CheckResolutionEligibilityTool(ReadOnlyTool[CheckEligibilityInput]):
         order = repository.get_order(arguments.order_id)
         if not order:
             return ToolResult.failure(self.name, "not_found", f"Order '{arguments.order_id}' not found.")
+
+        # Security check: Customer-order ownership verification
+        if arguments.customer_id and arguments.customer_id != order.get("customer_id"):
+            return ToolResult.success(
+                self.name,
+                f"Evaluated {arguments.resolution_type} eligibility for order {arguments.order_id}: eligible=False (OWNERSHIP MISMATCH).",
+                {
+                    "order_id": arguments.order_id,
+                    "resolution_type": arguments.resolution_type,
+                    "eligible": False,
+                    "requires_human_approval": True,
+                    "blocked_by": "ownership_mismatch",
+                    "reason": f"Security Violation: Order '{arguments.order_id}' does not belong to customer '{arguments.customer_id}' (actual owner: '{order.get('customer_id')}').",
+                    "recommendation": "Escalate to human support agent due to customer-order ownership mismatch.",
+                    "customer_tier": "Unknown",
+                    "order_price_inr": order.get("price", 0.0),
+                },
+            )
 
         cust = repository.get_customer(order["customer_id"])
         product_id = order.get("product_id")

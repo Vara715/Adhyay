@@ -96,9 +96,12 @@ export const LlmSettingsDrawer: React.FC<LlmSettingsDrawerProps> = ({
               type="text"
               value={model}
               onChange={(e) => setModel(e.target.value)}
-              placeholder="e.g. llama3.1"
+              placeholder="e.g. llama-3.3-70b-versatile or llama-3.1-8b-instant"
               required
             />
+            <span className="muted font-mono" style={{ fontSize: "0.75rem", marginTop: "0.25rem", display: "block" }}>
+              Groq models: llama-3.3-70b-versatile, llama-3.1-8b-instant, llama3-70b-8192
+            </span>
           </div>
 
           <div className="form-group">

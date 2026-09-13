@@ -36,8 +36,25 @@ class LLMDecisionProvider:
 
     def decide(self, state: AgentState, tools: list[ToolMetadata]) -> AgentDecision:
         response = self._client.complete(build_decision_request(state, tools))
-        if response.tool_call:
-            tool_name = response.tool_call.name
+        tool_call = response.tool_call
+
+        # Attempt JSON extraction from content text if no explicit native tool call was parsed
+        if tool_call is None and response.content and "{" in response.content:
+            import json
+            import re
+            json_match = re.search(r"\{.*\}", response.content, re.DOTALL)
+            if json_match:
+                try:
+                    parsed = json.loads(json_match.group(0))
+                    t_name = parsed.get("name") or parsed.get("tool") or parsed.get("action")
+                    t_args = parsed.get("arguments") or parsed.get("parameters") or {}
+                    if t_name and isinstance(t_name, str):
+                        tool_call = ToolCall(name=t_name, arguments=t_args if isinstance(t_args, dict) else {})
+                except Exception:
+                    pass
+
+        if tool_call:
+            tool_name = tool_call.name
             raw_reasoning = response.content or f"Selected {tool_name} based on evidence."
 
             # Sanitize and truncate reasoning to prevent raw chain-of-thought dumps
@@ -49,9 +66,25 @@ class LLMDecisionProvider:
             if tool_name not in available_names and tool_name != "finish_investigation":
                 raise ValueError(f"LLM proposed unknown or unpermitted tool '{tool_name}'.")
 
+            # FEATURE 3 RETRY GUARD: Prevent proposing create_replacement when inventory stock is 0
+            if tool_name == "create_replacement":
+                is_out_of_stock = False
+                for entry in state.tool_history:
+                    if entry.tool_call.name == "check_customer_resolution_eligibility":
+                        if entry.result.ok and entry.result.data.get("blocked_by") == "out_of_stock":
+                            is_out_of_stock = True
+                    elif entry.tool_call.name == "get_customer_inventory":
+                        if entry.result.ok and (entry.result.data.get("available_for_replacement") == 0 or entry.result.data.get("in_stock") is False):
+                            is_out_of_stock = True
+                if is_out_of_stock:
+                    raise ValueError(
+                        "LLM proposed create_replacement despite 0 inventory available. "
+                        "System policy forbids replacement retries when out of stock. Dynamic adaptation required."
+                    )
+
             if tool_name == "finish_investigation":
                 try:
-                    finish_args = FinishInvestigationInput.model_validate(response.tool_call.arguments)
+                    finish_args = FinishInvestigationInput.model_validate(tool_call.arguments)
                 except Exception:
                     return AgentDecision(
                         kind="finish",
@@ -80,14 +113,14 @@ class LLMDecisionProvider:
                     current_objective=f"Execute remediation action using {tool_name}.",
                     hypothesis=state.current_hypothesis,
                     reasoning=clean_reasoning,
-                    action_call=ActionCall(name=tool_name, arguments=response.tool_call.arguments),
+                    action_call=ActionCall(name=tool_name, arguments=tool_call.arguments),
                 )
             return AgentDecision(
                 kind="tool",
                 current_objective=f"Investigate using {tool_name}.",
                 hypothesis=state.current_hypothesis,
                 reasoning=clean_reasoning,
-                tool_call=response.tool_call,
+                tool_call=tool_call,
             )
 
         # No tool call returned
@@ -99,6 +132,7 @@ class LLMDecisionProvider:
             conclusion=response.content or "The investigation ended without a model conclusion.",
             confidence="low",
         )
+
 
 
 
@@ -313,27 +347,33 @@ class EvidenceBasedDecisionProvider:
             else:
                 target_order_id = "ORD-9001"
 
-            # Step 1: Handle tool failure if get_order failed
-            if self._latest_failure(state, "get_order"):
+            # Step 1: Handle tool failure or ownership mismatch if any investigation tool failed
+            failed_entry = next((entry for entry in reversed(state.tool_history) if not entry.result.ok), None)
+            if failed_entry:
                 case_identifier = state.customer_case.case_id if state.customer_case else f"CASE-{target_order_id}"
+                fail_reason = f"Investigation tool '{failed_entry.tool_call.name}' failure: {failed_entry.result.summary}"
+                if failed_entry.result.error and failed_entry.result.error.code == "ownership_mismatch":
+                    fail_reason = "Customer-order ownership mismatch security violation"
+                cust_id_param = (state.customer_case and state.customer_case.customer_id) or "CUST-801"
                 add(
                     "escalate_customer_case", 100,
-                    f"Escalate order lookup failure for {target_order_id}.",
-                    "Order lookup tool experienced an error.",
-                    f"Order investigation tool failed for {target_order_id}. Safely escalating case to human support queue.",
-                    {"case_id": case_identifier, "customer_id": "CUST-801", "reason": "Order lookup tool failure", "priority": "high"},
+                    f"Escalate investigation failure for {target_order_id}.",
+                    "Investigation tool experienced an error or security block.",
+                    f"Tool '{failed_entry.tool_call.name}' failed ({failed_entry.result.summary}). Safely escalating case to human support queue.",
+                    {"case_id": case_identifier, "customer_id": cust_id_param, "reason": fail_reason, "priority": "high"},
                     is_action=True,
                 )
                 return candidates
 
             # Step 1b: Query order details first if not yet retrieved
             if not get_order_res:
+                cust_arg = state.customer_case.customer_id if state.customer_case else None
                 add(
                     "get_order", 100,
                     f"Retrieve order details for {target_order_id}.",
                     "Order data is required to evaluate resolution options.",
                     "Goal involves a customer order issue; retrieving exact order status and line items.",
-                    {"order_id": target_order_id},
+                    {"order_id": target_order_id, "customer_id": cust_arg} if cust_arg else {"order_id": target_order_id},
                 )
                 return candidates
 
@@ -343,7 +383,41 @@ class EvidenceBasedDecisionProvider:
             prod_id = order_data.get("product_id", "PR-100")
             price = Decimal(str(order_data.get("price", 2499.0)))
 
-            # Step 1b: Check for unsupported or ambiguous customer goals
+            # Step 1c: Query product catalog specs if get_product available and not called yet
+            if "get_product" in available_tools and not self._attempted(state, "get_product"):
+                add(
+                    "get_product", 99,
+                    f"Retrieve product catalog specs for {prod_id}.",
+                    "Product catalog specifications are needed for resolution assessment.",
+                    f"Querying product catalog specifications and SKU details for {prod_id}.",
+                    {"product_id": prod_id},
+                )
+
+            # Step 1d: Check operational case logs if not queried yet
+            if "search_case_logs" in available_tools and not self._attempted(state, "search_case_logs"):
+                add(
+                    "search_case_logs", 99,
+                    f"Search warehouse and shipping logs for order {order_id}.",
+                    "Operational log verification corroborates claim evidence.",
+                    f"Querying warehouse packing scans and transit logs for order {order_id}.",
+                    {"order_id": order_id, "customer_id": cust_id, "log_type": "all"},
+                )
+                return candidates
+
+            # Step 1d: Handle CONTRADICTED claim status safely
+            if state.claim_assessment and state.claim_assessment.claim_status == "CONTRADICTED":
+                case_identifier = state.customer_case.case_id if state.customer_case else f"CASE-{order_id}"
+                add(
+                    "escalate_customer_case", 100,
+                    f"Escalate contradicted claim for order {order_id}.",
+                    "Customer claim is contradicted by verified image/log evidence.",
+                    f"Evidence assessment indicates claim is CONTRADICTED ({state.claim_assessment.reason}). Escalating to human agent for policy enforcement.",
+                    {"case_id": case_identifier, "customer_id": cust_id, "reason": f"Claim CONTRADICTED by evidence: {state.claim_assessment.reason}", "priority": "high"},
+                    is_action=True,
+                )
+                return candidates
+
+            # Step 1e: Check for unsupported or ambiguous customer goals
             unsupported_keywords = ["color", "address", "size", "discount", "warranty", "exchange", "gift card"]
             is_unsupported = any(k in goal for k in unsupported_keywords)
             if is_unsupported:

@@ -18,6 +18,9 @@ EventType = Literal[
     "action_executed",
     "verification",
     "completed",
+    "evidence_attached",
+    "claim_assessed",
+    "llm_fallback",
 ]
 
 

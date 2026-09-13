@@ -996,3 +996,41 @@ body {
   }
 }
 
+/* Presentation View Styles */
+.presentation-toggle-btn {
+  background: #1e293b;
+  color: #60a5fa;
+  border: 1px solid #3b82f6;
+  padding: 0.35rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.15s ease-in-out;
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.presentation-toggle-btn:hover {
+  background: #2563eb;
+  color: #ffffff;
+}
+
+.presentation-toggle-btn.active {
+  background: #2563eb;
+  color: #ffffff;
+  box-shadow: 0 0 10px rgba(37, 99, 235, 0.5);
+}
+
+.app-layout.presentation-mode {
+  width: 100vw;
+  max-width: 100%;
+  padding: 0 1rem;
+}
+
+.app-layout.presentation-mode .workspace-two-column-grid {
+  grid-template-columns: 1fr 1fr;
+  gap: 1.5rem;
+}
+

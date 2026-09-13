@@ -19,6 +19,7 @@ class ToolRegistryTests(unittest.TestCase):
             "get_service_health", "get_recent_deployments", "get_system_logs",
             "get_customer", "get_order", "get_customer_orders", "get_product_details",
             "get_policy", "check_customer_resolution_eligibility", "get_customer_inventory",
+            "search_case_logs", "get_product",
         })
 
     def test_seed_data_is_reproducible(self) -> None:
@@ -42,7 +43,7 @@ class ToolRegistryTests(unittest.TestCase):
 
     def test_discovery_metadata_contains_concise_schema(self) -> None:
         metadata = {item.name: item for item in self.tools.discover()}
-        self.assertEqual(len(metadata), 16)
+        self.assertEqual(len(metadata), 18)
         self.assertIn("properties", metadata["get_system_logs"].input_schema)
         self.assertLessEqual(len(metadata["get_system_logs"].description), 100)
 
