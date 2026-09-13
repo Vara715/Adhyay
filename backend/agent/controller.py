@@ -21,7 +21,7 @@ from backend.agent.state import (
     failed_state,
 )
 from backend.llm.provider import LLMProviderError
-from backend.models.agent import AgentDecision, AgentStatus
+from backend.models.agent import AgentDecision, AgentStatus, CustomerCase
 from backend.models.tools import ToolResult
 from backend.tools.actions import ActionRegistry
 from backend.tools.registry import ToolRegistry
@@ -77,14 +77,53 @@ class AgentController:
             tools.extend(self._action_registry.discover())
         return tools
 
-    def run(self, goal: str, step_delay: float = 0.0, lock: RLockType | None = None) -> AgentState:
+    def run(
+        self,
+        goal: str,
+        step_delay: float = 0.0,
+        lock: RLockType | None = None,
+        customer_case: CustomerCase | None = None,
+    ) -> AgentState:
         """Start a new investigation from a raw goal."""
         if not isinstance(goal, str) or not goal.strip():
             return failed_state(str(goal), "Provide a non-empty operational investigation goal.")
 
-        state = AgentState(original_goal=goal.strip())
+        case = customer_case or self._init_customer_case(goal.strip())
+        state = AgentState(original_goal=goal.strip(), customer_case=case)
         record_event(state, "decision", f"Investigation initialized for goal: {state.original_goal}")
         return self._run_loop(state, monotonic(), step_delay=step_delay, lock=lock)
+
+    @staticmethod
+    def _init_customer_case(goal: str) -> CustomerCase:
+        import re
+        from uuid import uuid4
+        from backend.models.agent import CustomerCase
+
+        order_match = re.search(r"ORD-\d+", goal, re.IGNORECASE)
+        customer_match = re.search(r"CUST-\d+", goal, re.IGNORECASE)
+        order_id = order_match.group(0).upper() if order_match else None
+        customer_id = customer_match.group(0).upper() if customer_match else None
+
+        case_id = f"CASE-{order_id}" if order_id else f"CS-{uuid4().hex[:6].upper()}"
+
+        goal_lower = goal.lower()
+        requested_res = None
+        if "refund" in goal_lower or "money back" in goal_lower or "return" in goal_lower:
+            requested_res = "refund"
+        elif "cancel" in goal_lower or "cancellation" in goal_lower:
+            requested_res = "cancellation"
+        elif "replace" in goal_lower or "replacement" in goal_lower:
+            requested_res = "replacement"
+
+        return CustomerCase(
+            case_id=case_id,
+            customer_id=customer_id,
+            order_id=order_id,
+            original_goal=goal,
+            issue=goal,
+            requested_resolution=requested_res,
+            status="OPEN",
+        )
 
     def resume_after_approval(
         self, state: AgentState, *, approved: bool, step_delay: float = 0.0, lock: RLockType | None = None
@@ -100,6 +139,8 @@ class AgentController:
         with guard:
             if approved:
                 self._action_registry.approve(proposal)
+                if state.customer_case:
+                    state.customer_case.status = "ACTION_IN_PROGRESS"
                 baseline = self._action_registry.capture_baseline(proposal)
                 result = self._action_registry.execute(proposal)
                 self._record_action_result(state, proposal, result)
@@ -123,28 +164,49 @@ class AgentController:
 
         guard = lock or nullcontext()
 
+        with guard:
+            if state.customer_case:
+                if state.customer_case.status == "OPEN":
+                    state.customer_case.status = "INVESTIGATING"
+                state.customer_case.original_goal = state.original_goal
+                state.customer_case.evidence = [item.fact for item in state.evidence]
+                state.customer_case.actions = list(state.actions)
+
         while state.step_count < self._max_steps:
             if monotonic() - started > self._timeout_seconds:
                 with guard:
                     return self._stop(state, "timed_out", "Investigation stopped because the configured time limit was reached.")
             try:
-                # Decision-provider calls (especially a real LLM over the network) can be slow;
-                # deliberately kept outside the lock so concurrent state reads (e.g. API polling)
-                # are never blocked for the duration of a model round-trip.
                 raw_decision = self._decision_provider.decide(state, self._available_tools())
                 decision = raw_decision if isinstance(raw_decision, AgentDecision) else AgentDecision.model_validate(raw_decision)
-            except (ValidationError, TypeError, ValueError) as error:
-                with guard:
-                    return self._stop(state, "failed", f"Malformed decision response: {error}")
-            except LLMProviderError as error:
-                with guard:
-                    return self._stop(
-                        state, "failed",
-                        f"The configured LLM endpoint could not be reached or returned an invalid response: {error}",
+            except (ValidationError, TypeError, ValueError, LLMProviderError) as error:
+                from backend.agent.decisions import LLMDecisionProvider, EvidenceBasedDecisionProvider
+                if isinstance(self._decision_provider, LLMDecisionProvider):
+                    record_event(
+                        state, "adaptation",
+                        f"LLM decision provider encountered an issue ({error}). Falling back to rule-based decision engine.",
+                        None,
                     )
-            except Exception:
-                with guard:
-                    return self._stop(state, "failed", "The investigation decision provider failed unexpectedly.")
+                    self._decision_provider = EvidenceBasedDecisionProvider()
+                    raw_decision = self._decision_provider.decide(state, self._available_tools())
+                    decision = raw_decision if isinstance(raw_decision, AgentDecision) else AgentDecision.model_validate(raw_decision)
+                else:
+                    with guard:
+                        return self._stop(state, "failed", f"Malformed decision response: {error}")
+            except Exception as error:
+                from backend.agent.decisions import LLMDecisionProvider, EvidenceBasedDecisionProvider
+                if isinstance(self._decision_provider, LLMDecisionProvider):
+                    record_event(
+                        state, "adaptation",
+                        f"LLM decision provider error ({error}). Falling back to rule-based decision engine.",
+                        None,
+                    )
+                    self._decision_provider = EvidenceBasedDecisionProvider()
+                    raw_decision = self._decision_provider.decide(state, self._available_tools())
+                    decision = raw_decision if isinstance(raw_decision, AgentDecision) else AgentDecision.model_validate(raw_decision)
+                else:
+                    with guard:
+                        return self._stop(state, "failed", f"The investigation decision provider failed unexpectedly: {error}")
 
             if monotonic() - started > self._timeout_seconds:
                 with guard:
@@ -152,9 +214,27 @@ class AgentController:
 
             with guard:
                 prior_hypothesis = state.current_hypothesis
-                self._record_adaptation_if_needed(state, decision)
                 target_name = self._decision_target_name(decision)
-                record_event(state, "decision", f"Selected {target_name or 'completion'}: {decision.reasoning}", target_name)
+
+                if "adapt" in decision.reasoning.lower() or "adapt" in decision.current_objective.lower():
+                    state.adaptation_required = True
+                    state.previous_plan = state.current_objective
+                    state.adaptation_reason = decision.reasoning
+                    state.adaptation_count += 1
+                    if target_name and target_name not in state.alternatives_considered:
+                        state.alternatives_considered.append(target_name)
+                    if state.customer_case:
+                        state.customer_case.adaptation_count = state.adaptation_count
+                        state.customer_case.adaptation_summary = decision.reasoning
+                    record_event(state, "adaptation", f"Adaptive strategy update #{state.adaptation_count}: {decision.reasoning}", target_name)
+                else:
+                    self._record_adaptation_if_needed(state, decision)
+
+                from backend.agent.decisions import LLMDecisionProvider
+                is_llm = isinstance(self._decision_provider, LLMDecisionProvider)
+                event_type = "llm_decision" if is_llm else "decision"
+                prefix = "LLM selected" if is_llm else "Rule-based policy selected"
+                record_event(state, event_type, f"{prefix} {target_name or 'completion'}: {decision.reasoning}", target_name)
                 state.current_objective = decision.current_objective
                 state.current_hypothesis = decision.hypothesis
                 if decision.hypothesis != prior_hypothesis:
@@ -166,7 +246,43 @@ class AgentController:
                 if decision.kind == "finish":
                     state.status = "completed"
                     if state.customer_case:
-                        state.customer_case.status = "RESOLVED"
+                        state.customer_case.evidence = [item.fact for item in state.evidence]
+                        state.customer_case.actions = list(state.actions)
+                        state.customer_case.unresolved_issues = list(state.verification_notes)
+
+                        has_unverified = bool(state.verification_notes) or any(
+                            p.verification and p.verification.status != "verified"
+                            for p in state.action_proposals
+                            if p.approval_status == "executed"
+                        )
+                        has_escalation = any(
+                            p.action == "escalate_customer_case"
+                            for p in state.action_proposals
+                            if p.approval_status == "executed"
+                        )
+                        has_executed_action = any(
+                            p.approval_status == "executed" for p in state.action_proposals
+                        )
+
+                        if has_unverified:
+                            # CRITICAL RULE: Never mark RESOLVED if verification failed/inconclusive!
+                            state.customer_case.status = "FAILED"
+                            state.customer_case.final_resolution = "Resolution unconfirmed: verification failed or incomplete."
+                        elif has_escalation:
+                            state.customer_case.status = "ESCALATED"
+                            state.customer_case.escalation_reason = decision.conclusion
+                            state.customer_case.final_resolution = decision.conclusion
+                        elif state.customer_case.requested_resolution and not has_executed_action:
+                            # CRITICAL RULE: Never mark RESOLVED if no remediation action was executed for requested resolution
+                            state.customer_case.status = "FAILED"
+                            state.customer_case.unresolved_issues.append("No remediation action was executed for requested resolution.")
+                            state.customer_case.final_resolution = "Resolution incomplete: no remediation action executed."
+                        else:
+                            # CRITICAL RULE SATISFIED: Objective completed, expected state changed, verification succeeded
+                            state.customer_case.status = "RESOLVED"
+                            state.customer_case.final_resolution = decision.conclusion or "Customer issue resolved successfully."
+
+
                     state.final_result = FinalResult(
                         conclusion=decision.conclusion or "Investigation completed without a conclusion.",
                         confidence=decision.confidence,
@@ -243,8 +359,13 @@ class AgentController:
         if proposal.permission_level == "high_risk":
             state.pending_action = proposal
             state.status = "awaiting_approval"
+            if state.customer_case:
+                state.customer_case.status = "AWAITING_APPROVAL"
             record_event(state, "approval_required", f"{proposal.action} requires human approval before it can run.", proposal.action)
             return state
+
+        if state.customer_case:
+            state.customer_case.status = "ACTION_IN_PROGRESS"
 
         baseline = self._action_registry.capture_baseline(proposal)
         result = self._action_registry.execute(proposal)
@@ -261,14 +382,36 @@ class AgentController:
         outcomes are both recorded as unresolved so they cannot be silently dropped from the
         final report.
         """
+        if state.customer_case:
+            state.customer_case.status = "VERIFYING"
+
         outcome = self._action_registry.verify(proposal, baseline)
         proposal.verification = outcome
         proposal.outcome_summary = f"Executed; verification {outcome.status}: {outcome.detail}"
+        if state.customer_case:
+            state.customer_case.verification_results.append(
+                f"{proposal.action} verification {outcome.status}: {outcome.detail}"
+            )
         record_event(state, "verification", f"{proposal.action} verification {outcome.status}: {outcome.detail}", proposal.action)
+
         if outcome.status == "verified":
             state.evidence.append(EvidenceItem(source="Post-Action Verification", fact=f"Verified {proposal.action}: {outcome.detail}", kind="verified"))
+            if state.customer_case:
+                state.customer_case.evidence.append(f"Verified {proposal.action}: {outcome.detail}")
         else:
+            state.adaptation_required = True
+            state.failed_constraint = f"{proposal.action} verification {outcome.status}: {outcome.detail}"
+            state.previous_plan = state.current_objective
+            state.adaptation_reason = f"Verification {outcome.status} for action {proposal.action}"
+            state.adaptation_count += 1
             state.verification_notes.append(f"{proposal.action}: {outcome.detail}")
+            if state.customer_case:
+                state.customer_case.adaptation_count = state.adaptation_count
+                state.customer_case.adaptation_summary = f"Verification {outcome.status} for {proposal.action}"
+                state.customer_case.unresolved_issues.append(
+                    f"{proposal.action}: verification {outcome.status} - {outcome.detail}"
+                )
+                state.customer_case.status = "INVESTIGATING"
 
     @staticmethod
     def _record_action_result(state: AgentState, proposal: ActionProposal, result: ToolResult) -> None:
@@ -292,7 +435,13 @@ class AgentController:
     def _stop(state: AgentState, status: AgentStatus, message: str) -> AgentState:
         state.status = status
         if state.customer_case:
-            state.customer_case.status = "ESCALATED"
+            if status in ("timed_out", "failed", "step_limit_reached"):
+                state.customer_case.status = "FAILED"
+            else:
+                state.customer_case.status = "ESCALATED"
+            state.customer_case.unresolved_issues = [message, *state.verification_notes]
+            state.customer_case.final_resolution = message
+
         state.failures.append(message)
         state.final_result = FinalResult(
             conclusion=message,
@@ -310,6 +459,13 @@ class AgentController:
         previous = state.tool_history[-1]
         next_name = cls._decision_target_name(decision) or "a safe completion"
         if not previous.result.ok:
+            state.adaptation_required = True
+            state.failed_constraint = f"Tool failure in {previous.result.tool_name}"
+            state.previous_plan = state.current_objective
+            state.adaptation_count += 1
+            if state.customer_case:
+                state.customer_case.adaptation_count = state.adaptation_count
+                state.customer_case.adaptation_summary = f"{previous.result.tool_name} failed; adapted plan to {next_name}"
             record_event(
                 state,
                 "adaptation",

@@ -17,6 +17,8 @@ class ToolRegistryTests(unittest.TestCase):
             "get_revenue_metrics", "get_order_metrics", "get_product_sales",
             "get_inventory_status", "get_supplier_status", "get_payment_status",
             "get_service_health", "get_recent_deployments", "get_system_logs",
+            "get_customer", "get_order", "get_customer_orders", "get_product_details",
+            "get_policy", "check_customer_resolution_eligibility", "get_customer_inventory",
         })
 
     def test_seed_data_is_reproducible(self) -> None:
@@ -40,9 +42,10 @@ class ToolRegistryTests(unittest.TestCase):
 
     def test_discovery_metadata_contains_concise_schema(self) -> None:
         metadata = {item.name: item for item in self.tools.discover()}
-        self.assertEqual(len(metadata), 9)
+        self.assertEqual(len(metadata), 16)
         self.assertIn("properties", metadata["get_system_logs"].input_schema)
         self.assertLessEqual(len(metadata["get_system_logs"].description), 100)
+
 
     def test_malformed_tool_call_is_blocked_before_execution(self) -> None:
         result = self.tools.execute({"name": "get_payment_status", "arguments": ["not-an-object"]})
@@ -64,8 +67,8 @@ class ToolRegistryTests(unittest.TestCase):
         self.assertFalse(result.ok)
         self.assertEqual(result.error.code, "not_found")
 
-    def test_four_scenarios_are_available(self) -> None:
-        self.assertEqual(len(available_scenarios()), 4)
+    def test_eight_scenarios_are_available(self) -> None:
+        self.assertGreaterEqual(len(available_scenarios()), 8)
 
 
 if __name__ == "__main__":

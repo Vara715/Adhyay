@@ -235,14 +235,213 @@ class RequestHumanApprovalTool(ActionTool):
         return VerificationOutcome(status="verified", detail="No operational state change to verify.", before={}, after={})
 
 
+class IssueRefundInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    order_id: str = Field(min_length=1)
+    customer_id: str = Field(min_length=1)
+    amount_inr: Decimal = Field(gt=0)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class CreateReplacementInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    order_id: str = Field(min_length=1)
+    customer_id: str = Field(min_length=1)
+    product_id: str = Field(min_length=1)
+    quantity: int = Field(ge=1, le=100)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class CancelOrderInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    order_id: str = Field(min_length=1)
+    customer_id: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class EscalateCustomerCaseInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    case_id: str = Field(min_length=1)
+    customer_id: str = Field(min_length=1)
+    reason: str = Field(min_length=1, max_length=500)
+    priority: str = Field(default="medium", pattern="^(low|medium|high|urgent)$")
+
+
+class IssueRefundTool(ActionTool):
+    name = "issue_refund"
+    description = "Issue a financial refund for a customer order."
+    input_model = IssueRefundInput
+
+    def permission_level(self, arguments: IssueRefundInput, approval_threshold_inr: Decimal) -> PermissionLevel:
+        return "high_risk" if arguments.amount_inr >= approval_threshold_inr else "low_risk"
+
+    def estimated_impact(self, arguments: IssueRefundInput) -> dict[str, Any]:
+        return {"order_id": arguments.order_id, "amount_inr": str(arguments.amount_inr), "expected_effect": "Process financial refund to customer."}
+
+    def risk(self, arguments: IssueRefundInput) -> str:
+        return "Financial refund permanently credits the customer's account."
+
+    def capture_baseline(self, repository: SimulatedCompanyRepository, arguments: IssueRefundInput) -> dict[str, Any]:
+        order = repository.get_order(arguments.order_id) or {}
+        return {"order_id": arguments.order_id, "status": order.get("status"), "refund_state": order.get("refund_state")}
+
+    def verify(self, repository: SimulatedCompanyRepository, arguments: IssueRefundInput, baseline: dict[str, Any]) -> VerificationOutcome:
+        order = repository.get_order(arguments.order_id) or {}
+        refunds = repository.get_collection("refunds")
+        refund_record = next((r for r in refunds if r.get("order_id") == arguments.order_id), None)
+        after = {"order_id": arguments.order_id, "status": order.get("status"), "refund_state": order.get("refund_state")}
+
+        if order.get("status") == "refunded" and order.get("refund_state") == "completed" and refund_record is not None:
+            return VerificationOutcome(
+                status="verified",
+                detail=f"Refund of ₹{arguments.amount_inr} for order {arguments.order_id} verified.",
+                before=baseline, after=after,
+            )
+        return VerificationOutcome(
+            status="failed",
+            detail=f"Order {arguments.order_id} status was not updated to refunded (current status: {order.get('status')}).",
+            before=baseline, after=after,
+        )
+
+
+class CreateReplacementTool(ActionTool):
+    name = "create_replacement"
+    description = "Process an order replacement and dispatch replacement inventory."
+    input_model = CreateReplacementInput
+
+    def permission_level(self, arguments: CreateReplacementInput, approval_threshold_inr: Decimal) -> PermissionLevel:
+        return "low_risk"
+
+    def estimated_impact(self, arguments: CreateReplacementInput) -> dict[str, Any]:
+        return {"order_id": arguments.order_id, "product_id": arguments.product_id, "quantity": arguments.quantity, "expected_effect": "Deduct inventory and dispatch replacement unit."}
+
+    def risk(self, arguments: CreateReplacementInput) -> str:
+        return "Dispatches replacement unit and updates inventory stock."
+
+    def capture_baseline(self, repository: SimulatedCompanyRepository, arguments: CreateReplacementInput) -> dict[str, Any]:
+        order = repository.get_order(arguments.order_id) or {}
+        inv = repository.get_collection("inventory")
+        record = next((item for item in inv if item.get("product_id") == arguments.product_id), {})
+        return {
+            "order_id": arguments.order_id,
+            "product_id": arguments.product_id,
+            "on_hand": record.get("on_hand"),
+            "replacement_state": order.get("replacement_state"),
+        }
+
+    def verify(self, repository: SimulatedCompanyRepository, arguments: CreateReplacementInput, baseline: dict[str, Any]) -> VerificationOutcome:
+        order = repository.get_order(arguments.order_id) or {}
+        inv = repository.get_collection("inventory")
+        record = next((item for item in inv if item.get("product_id") == arguments.product_id), {})
+        replacements = repository.get_collection("replacements")
+        replacement_record = next((r for r in replacements if r.get("order_id") == arguments.order_id), None)
+
+        after = {
+            "order_id": arguments.order_id,
+            "product_id": arguments.product_id,
+            "on_hand": record.get("on_hand"),
+            "replacement_state": order.get("replacement_state"),
+        }
+
+        if order.get("replacement_state") == "completed" and replacement_record is not None:
+            return VerificationOutcome(
+                status="verified",
+                detail=f"Replacement unit for product {arguments.product_id} (order {arguments.order_id}) verified.",
+                before=baseline, after=after,
+            )
+        return VerificationOutcome(
+            status="failed",
+            detail=f"Order {arguments.order_id} replacement state could not be verified.",
+            before=baseline, after=after,
+        )
+
+
+class CancelOrderTool(ActionTool):
+    name = "cancel_order"
+    description = "Cancel a pending customer order and stop fulfillment."
+    input_model = CancelOrderInput
+
+    def permission_level(self, arguments: CancelOrderInput, approval_threshold_inr: Decimal) -> PermissionLevel:
+        return "low_risk"
+
+    def estimated_impact(self, arguments: CancelOrderInput) -> dict[str, Any]:
+        return {"order_id": arguments.order_id, "expected_effect": "Cancel order and halt shipment."}
+
+    def risk(self, arguments: CancelOrderInput) -> str:
+        return "Order cancellation updates fulfillment status to unfulfilled and cancels order."
+
+    def capture_baseline(self, repository: SimulatedCompanyRepository, arguments: CancelOrderInput) -> dict[str, Any]:
+        order = repository.get_order(arguments.order_id) or {}
+        return {"order_id": arguments.order_id, "status": order.get("status"), "cancellation_state": order.get("cancellation_state")}
+
+    def verify(self, repository: SimulatedCompanyRepository, arguments: CancelOrderInput, baseline: dict[str, Any]) -> VerificationOutcome:
+        order = repository.get_order(arguments.order_id) or {}
+        after = {"order_id": arguments.order_id, "status": order.get("status"), "cancellation_state": order.get("cancellation_state")}
+
+        if order.get("status") == "cancelled" and order.get("cancellation_state") == "completed":
+            return VerificationOutcome(
+                status="verified",
+                detail=f"Order {arguments.order_id} cancellation verified.",
+                before=baseline, after=after,
+            )
+        return VerificationOutcome(
+            status="failed",
+            detail=f"Order {arguments.order_id} status was not updated to cancelled (current status: {order.get('status')}).",
+            before=baseline, after=after,
+        )
+
+
+class EscalateCustomerCaseTool(ActionTool):
+    name = "escalate_customer_case"
+    description = "Escalate an unresolved customer case to a human support agent."
+    input_model = EscalateCustomerCaseInput
+
+    def permission_level(self, arguments: EscalateCustomerCaseInput, approval_threshold_inr: Decimal) -> PermissionLevel:
+        return "low_risk"
+
+    def estimated_impact(self, arguments: EscalateCustomerCaseInput) -> dict[str, Any]:
+        return {"case_id": arguments.case_id, "customer_id": arguments.customer_id, "priority": arguments.priority, "expected_effect": "Creates a human escalation record in customer support queue."}
+
+    def risk(self, arguments: EscalateCustomerCaseInput) -> str:
+        return "Routes customer case to human support agent."
+
+    def capture_baseline(self, repository: SimulatedCompanyRepository, arguments: EscalateCustomerCaseInput) -> dict[str, Any]:
+        tickets = repository.get_collection("support_tickets")
+        return {"open_customer_escalations": sum(1 for t in tickets if t.get("category") == "customer_escalation")}
+
+    def verify(self, repository: SimulatedCompanyRepository, arguments: EscalateCustomerCaseInput, baseline: dict[str, Any]) -> VerificationOutcome:
+        tickets = repository.get_collection("support_tickets")
+        matching = [t for t in tickets if t.get("category") == "customer_escalation" and t.get("customer_id") == arguments.customer_id]
+        if not matching:
+            return VerificationOutcome(
+                status="failed", detail=f"No customer escalation ticket was found for case {arguments.case_id}.",
+                before=baseline, after={},
+            )
+        latest = matching[-1]
+        after = {"ticket_id": latest.get("ticket_id"), "status": latest.get("status")}
+        return VerificationOutcome(
+            status="verified",
+            detail=f"Customer case {arguments.case_id} successfully escalated to human agent queue (ticket {latest.get('ticket_id')}).",
+            before=baseline, after=after,
+        )
+
+
 class ActionRegistry:
     """Validates, proposes, approves, rejects, and executes simulated actions safely."""
 
     def __init__(self, repository: SimulatedCompanyRepository, approval_threshold_inr: Decimal) -> None:
         self._repository = repository
         self._approval_threshold_inr = approval_threshold_inr
-        tools: list[ActionTool] = [CreatePurchaseRequestTool(), RollbackDeploymentTool(), CreateSupportTicketTool(), RequestHumanApprovalTool()]
+        tools: list[ActionTool] = [
+            CreatePurchaseRequestTool(), RollbackDeploymentTool(), CreateSupportTicketTool(), RequestHumanApprovalTool(),
+            IssueRefundTool(), CreateReplacementTool(), CancelOrderTool(), EscalateCustomerCaseTool(),
+        ]
         self._tools = {tool.name: tool for tool in tools}
+
 
     @property
     def names(self) -> tuple[str, ...]:
@@ -298,10 +497,13 @@ class ActionRegistry:
         return tool.verify(self._repository, validated, baseline)
 
     def execute(self, proposal: ActionProposal) -> ToolResult:
+        if proposal.approval_status == "rejected":
+            return ToolResult.failure(proposal.action, "invalid_action_state", "Action was rejected by human reviewer and cannot execute.")
         if proposal.permission_level == "high_risk" and proposal.approval_status != "approved":
             return ToolResult.failure(proposal.action, "approval_required", "High-risk action cannot execute without explicit approval.")
-        if proposal.approval_status in {"rejected", "failed", "executed"}:
+        if proposal.approval_status in {"failed", "executed"}:
             return ToolResult.failure(proposal.action, "invalid_action_state", "Action is not executable in its current approval state.")
+
         failure = self._repository.get_action_failure(proposal.action)
         if failure:
             proposal.approval_status = "failed"

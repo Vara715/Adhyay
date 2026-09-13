@@ -177,6 +177,115 @@ def _base_data() -> dict[str, Any]:
             }
         ],
         "purchase_requests": [],
+        "customers": [
+            {
+                "customer_id": "CUST-801",
+                "name": "Aarav Sharma",
+                "email": "aarav.sharma@example.com",
+                "tier": "VIP",
+                "history_summary": "High-value loyal customer (14 past orders). 0 previous returns.",
+                "total_orders": 14,
+                "total_spent_inr": 48_500.0,
+                "notes": "Fast-track support eligible.",
+            },
+            {
+                "customer_id": "CUST-802",
+                "name": "Priya Patel",
+                "email": "priya.patel@example.com",
+                "tier": "Standard",
+                "history_summary": "Standard customer (3 past orders). 1 previous replacement.",
+                "total_orders": 3,
+                "total_spent_inr": 5_497.0,
+                "notes": "Prefers email communication.",
+            },
+            {
+                "customer_id": "CUST-803",
+                "name": "Vikram Malhotra",
+                "email": "vikram.m@example.com",
+                "tier": "Gold",
+                "history_summary": "Frequent buyer (8 past orders). Active subscription.",
+                "total_orders": 8,
+                "total_spent_inr": 22_100.0,
+                "notes": "Verified business account.",
+            },
+            {
+                "customer_id": "CUST-804",
+                "name": "Ananya Roy",
+                "email": "ananya.roy@example.com",
+                "tier": "Standard",
+                "history_summary": "First-time buyer (1 past order).",
+                "total_orders": 1,
+                "total_spent_inr": 1_299.0,
+                "notes": "New account.",
+            },
+        ],
+        "customer_orders": [
+            {
+                "order_id": "ORD-9001",
+                "customer_id": "CUST-801",
+                "product_id": "PR-100",
+                "order_date": "2026-09-08",
+                "price": 2_499.0,
+                "status": "delivered",
+                "fulfillment_status": "delivered",
+                "issue_information": "Defective product received: Left earpiece produces static noise.",
+                "refund_state": "eligible",
+                "replacement_state": "requested",
+                "cancellation_state": "none",
+            },
+            {
+                "order_id": "ORD-9002",
+                "customer_id": "CUST-801",
+                "product_id": "PR-200",
+                "order_date": "2026-09-09",
+                "price": 6_500.0,
+                "status": "delivered",
+                "fulfillment_status": "delivered",
+                "issue_information": "Package arrived damaged during transit. High-value item.",
+                "refund_state": "requested",
+                "replacement_state": "eligible",
+                "cancellation_state": "none",
+            },
+            {
+                "order_id": "ORD-9003",
+                "customer_id": "CUST-802",
+                "product_id": "PR-300",
+                "order_date": "2026-09-09",
+                "price": 1_299.0,
+                "status": "processing",
+                "fulfillment_status": "pending",
+                "issue_information": "Customer requested order replacement, but product PR-300 stock is out.",
+                "refund_state": "eligible",
+                "replacement_state": "blocked_out_of_stock",
+                "cancellation_state": "eligible",
+            },
+            {
+                "order_id": "ORD-9004",
+                "customer_id": "CUST-803",
+                "product_id": "PR-100",
+                "order_date": "2026-09-07",
+                "price": 2_499.0,
+                "status": "shipped",
+                "fulfillment_status": "in_transit",
+                "issue_information": "Late cancellation requested after order dispatched from warehouse.",
+                "refund_state": "none",
+                "replacement_state": "none",
+                "cancellation_state": "blocked_shipped",
+            },
+            {
+                "order_id": "ORD-9005",
+                "customer_id": "CUST-804",
+                "product_id": "PR-300",
+                "order_date": "2026-09-10",
+                "price": 1_299.0,
+                "status": "processing",
+                "fulfillment_status": "pending",
+                "issue_information": "None",
+                "refund_state": "none",
+                "replacement_state": "none",
+                "cancellation_state": "requested",
+            },
+        ],
         "logs": [
             {
                 "timestamp": "2026-09-10T10:00:00Z",
@@ -192,6 +301,7 @@ def _base_data() -> dict[str, Any]:
             },
         ],
     }
+
 
 
 def _inventory_supplier_failure() -> ScenarioDefinition:
@@ -269,6 +379,55 @@ def _misleading_initial_hypothesis() -> ScenarioDefinition:
     )
 
 
+def _customer_damaged_replacement_available() -> ScenarioDefinition:
+    data = _base_data()
+    return ScenarioDefinition(
+        key="customer_damaged_replacement_available",
+        name="Customer damaged product replacement available",
+        description="Customer received a damaged product and requests a replacement. Replacement inventory is in stock.",
+        data=data,
+    )
+
+
+def _customer_replacement_out_of_stock_adapts_refund() -> ScenarioDefinition:
+    data = _base_data()
+    data["inventory"][2].update(on_hand=0, reserved=0)
+    data["customer_orders"][2].update(replacement_state="blocked_out_of_stock")
+    return ScenarioDefinition(
+        key="customer_replacement_out_of_stock_adapts_refund",
+        name="Customer replacement stockout adapts to refund",
+        description="Customer requested a replacement unit, but inventory is out of stock. The agent dynamically adapts to issue a refund.",
+        data=data,
+    )
+
+
+def _customer_refund_denied_policy_escalation() -> ScenarioDefinition:
+    data = _base_data()
+    return ScenarioDefinition(
+        key="customer_refund_denied_policy_escalation",
+        name="Customer post-dispatch cancellation policy escalation",
+        description="Customer requested cancellation for an order that has already shipped. Policy forbids auto-cancellation post-dispatch, requiring agent escalation.",
+        data=data,
+    )
+
+
+def _customer_investigation_tool_failure_adapts() -> ScenarioDefinition:
+    data = _base_data()
+    return ScenarioDefinition(
+        key="customer_investigation_tool_failure_adapts",
+        name="Customer investigation tool failure adaptation",
+        description="A customer resolution lookup tool experiences a temporary failure. The agent detects the failure and adapts cleanly.",
+        data=data,
+        failure_plans=(
+            FailurePlan(
+                "get_customer_inventory",
+                1,
+                "Customer inventory service is temporarily unavailable. Retry or check catalog details.",
+            ),
+        ),
+    )
+
+
 SCENARIOS: dict[str, ScenarioDefinition] = {
     scenario.key: scenario
     for scenario in (
@@ -276,6 +435,10 @@ SCENARIOS: dict[str, ScenarioDefinition] = {
         _payment_failure(),
         _deployment_service_failure(),
         _misleading_initial_hypothesis(),
+        _customer_damaged_replacement_available(),
+        _customer_replacement_out_of_stock_adapts_refund(),
+        _customer_refund_denied_policy_escalation(),
+        _customer_investigation_tool_failure_adapts(),
     )
 }
 

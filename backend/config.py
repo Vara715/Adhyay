@@ -31,11 +31,12 @@ class Settings(BaseSettings):
 
     @property
     def llm_is_configured(self) -> bool:
-        """True only when the future agent has the configuration it needs."""
+        """True only when the agent has the configuration it needs."""
+        is_local = (self.llm_provider or "").strip().lower() in ("ollama", "vllm", "lmstudio", "llamacpp")
+        has_key = bool(self.llm_api_key and self.llm_api_key.get_secret_value())
         return bool(
             self.llm_provider
-            and self.llm_api_key is not None
-            and self.llm_api_key.get_secret_value()
+            and (has_key or is_local)
             and self.llm_model
         )
 
@@ -49,6 +50,46 @@ class Settings(BaseSettings):
         )
 
 
-@lru_cache
+_settings_instance: Settings | None = None
+
+
 def get_settings() -> Settings:
-    return Settings()
+    global _settings_instance
+    if _settings_instance is None:
+        _settings_instance = Settings()
+    return _settings_instance
+
+
+def update_llm_settings(
+    provider: str | None = None,
+    api_key: str | SecretStr | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+) -> Settings:
+    """Safely update LLM settings at runtime without storing secrets in plain text."""
+    settings = get_settings()
+    if provider is not None:
+        settings.llm_provider = provider.strip() if provider.strip() else None
+    if model is not None:
+        settings.llm_model = model.strip() if model.strip() else None
+    if base_url is not None:
+        settings.llm_base_url = base_url.strip() if base_url.strip() else None
+    if api_key is not None:
+        if isinstance(api_key, SecretStr):
+            settings.llm_api_key = api_key
+        elif isinstance(api_key, str) and api_key.strip():
+            settings.llm_api_key = SecretStr(api_key.strip())
+        else:
+            settings.llm_api_key = None
+    return settings
+
+
+def reset_llm_settings() -> Settings:
+    """Reset LLM configuration back to unconfigured state (deterministic fallback)."""
+    settings = get_settings()
+    settings.llm_provider = None
+    settings.llm_api_key = None
+    settings.llm_model = None
+    settings.llm_base_url = None
+    return settings
+

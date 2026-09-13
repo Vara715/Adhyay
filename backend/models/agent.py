@@ -14,6 +14,17 @@ AgentStatus = Literal[
     "running", "awaiting_approval", "completed", "failed", "timed_out", "step_limit_reached",
 ]
 
+CustomerCaseStatus = Literal[
+    "OPEN",
+    "INVESTIGATING",
+    "AWAITING_APPROVAL",
+    "ACTION_IN_PROGRESS",
+    "VERIFYING",
+    "RESOLVED",
+    "ESCALATED",
+    "FAILED",
+]
+
 
 class EvidenceItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -27,10 +38,26 @@ class CustomerCase(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     case_id: str
-    issue: str
+    customer_id: str | None = None
+    order_id: str | None = None
+    original_goal: str = ""
+    issue: str = ""
+    requested_resolution: str | None = None
+    status: CustomerCaseStatus = "OPEN"
+    evidence: list[str] = Field(default_factory=list)
+    actions: list[str] = Field(default_factory=list)
+    verification_results: list[str] = Field(default_factory=list)
+    unresolved_issues: list[str] = Field(default_factory=list)
+    escalation_reason: str | None = None
+    final_resolution: str | None = None
+
+    # Explicit Adaptation Tracking
+    adaptation_count: int = 0
+    adaptation_summary: str | None = None
+
+    # Preserved for backward compatibility
     impact: str = "HIGH"
     affected_service: str = "Operational Service"
-    status: str = "INVESTIGATING"
 
 
 class ToolHistoryEntry(BaseModel):
@@ -74,6 +101,14 @@ class AgentState(BaseModel):
     final_result: FinalResult | None = None
     started_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     step_count: int = 0
+
+    # Explicit Adaptation Tracking
+    adaptation_required: bool = False
+    adaptation_reason: str | None = None
+    previous_plan: str | None = None
+    failed_constraint: str | None = None
+    adaptation_count: int = 0
+    alternatives_considered: list[str] = Field(default_factory=list)
 
 
 class AgentDecision(BaseModel):

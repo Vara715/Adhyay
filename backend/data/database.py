@@ -28,6 +28,22 @@ class SimulatedCompanyRepository:
         """Return a copy to make tool reads side-effect free."""
         return deepcopy(self._data[name])
 
+    def get_customer(self, customer_id: str) -> dict[str, Any] | None:
+        """Retrieve a specific customer profile by ID."""
+        customers = self.get_collection("customers")
+        return next((c for c in customers if c.get("customer_id") == customer_id), None)
+
+    def get_customer_orders(self, customer_id: str) -> list[dict[str, Any]]:
+        """Retrieve all orders placed by a specific customer."""
+        orders = self.get_collection("customer_orders")
+        return [o for o in orders if o.get("customer_id") == customer_id]
+
+    def get_order(self, order_id: str) -> dict[str, Any] | None:
+        """Retrieve a specific customer order by order ID."""
+        orders = self.get_collection("customer_orders")
+        return next((o for o in orders if o.get("order_id") == order_id), None)
+
+
     def check_failure(self, tool_name: str) -> ToolError | None:
         """Consume a scenario-defined failure window for this tool call."""
         calls = self._tool_call_counts.get(tool_name, 0) + 1
@@ -104,3 +120,58 @@ class SimulatedCompanyRepository:
                     if key != "overall_status"
                 )
                 service_health["overall_status"] = "degraded" if still_degraded else "healthy"
+        elif action_name == "issue_refund":
+            order_id = arguments.get("order_id")
+            orders = self._data.get("customer_orders", [])
+            order = next((o for o in orders if o.get("order_id") == order_id), None)
+            if order:
+                order["status"] = "refunded"
+                order["refund_state"] = "completed"
+            self._data.setdefault("refunds", []).append({
+                "refund_id": action_id,
+                "order_id": order_id,
+                "customer_id": arguments.get("customer_id"),
+                "amount_inr": float(arguments.get("amount_inr", 0)),
+                "reason": arguments.get("reason"),
+                "status": "completed",
+            })
+        elif action_name == "create_replacement":
+            order_id = arguments.get("order_id")
+            product_id = arguments.get("product_id")
+            qty = int(arguments.get("quantity", 1))
+            orders = self._data.get("customer_orders", [])
+            order = next((o for o in orders if o.get("order_id") == order_id), None)
+            if order:
+                order["replacement_state"] = "completed"
+            inventory = self._data.get("inventory", [])
+            inv_item = next((i for i in inventory if i.get("product_id") == product_id), None)
+            if inv_item:
+                inv_item["on_hand"] = max(0, inv_item.get("on_hand", 0) - qty)
+            self._data.setdefault("replacements", []).append({
+                "replacement_id": action_id,
+                "order_id": order_id,
+                "customer_id": arguments.get("customer_id"),
+                "product_id": product_id,
+                "quantity": qty,
+                "status": "dispatched",
+            })
+        elif action_name == "cancel_order":
+            order_id = arguments.get("order_id")
+            orders = self._data.get("customer_orders", [])
+            order = next((o for o in orders if o.get("order_id") == order_id), None)
+            if order:
+                order["status"] = "cancelled"
+                order["cancellation_state"] = "completed"
+                order["fulfillment_status"] = "unfulfilled"
+        elif action_name == "escalate_customer_case":
+            self._data.setdefault("support_tickets", []).append({
+                "ticket_id": action_id,
+                "customer_id": arguments.get("customer_id"),
+                "case_id": arguments.get("case_id"),
+                "category": "customer_escalation",
+                "status": "open",
+                "title": f"Escalation for Customer {arguments.get('customer_id')}",
+                "summary": arguments.get("reason"),
+                "severity": arguments.get("priority", "medium"),
+            })
+

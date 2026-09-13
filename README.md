@@ -1,19 +1,99 @@
 # ADHYAY — Autonomous Customer & Operations Resolution Agent
 
-Adhyay is a lightweight, local-first agentic operations investigator and customer/operations resolution system built for **Track 3 (Smart Automation) — Problem Statement 5 (Autonomous Customer Resolution Agent)**.
+Adhyay is a local-first, lightweight, agentic customer resolution and operations investigation platform built for **Track 3 (Smart Automation) — Problem Statement 5 (Autonomous Customer Resolution Agent)**.
 
-Rather than merely classifying issues or generating static text responses, Adhyay dynamically investigates root causes using structured tools, adapts to data quality issues/outages, proposes safe corrective actions, permission-gates high-risk operations via human approval, and verifies post-action state changes before concluding.
+Rather than relying on static chat templates, hard-coded decision trees, or superficial text classification, Adhyay operates as a true autonomous agent. It dynamically investigates customer orders, queries policies and inventory, selects permitted remediation actions, permission-gates high-risk operations via human approval, verifies post-action database mutations, adapts when blocked, and escalates safely when constraints prevent automated resolution.
 
 ---
 
-## Key Features
+## Table of Contents
 
-- **Goal-Driven Execution**: Takes natural-language operational goals and dynamically selects investigation steps.
-- **Dynamic Tool Selection**: Discovers and executes 9 read-only inspection tools and 4 state-changing action tools.
-- **Agentic Adaptation**: Adapts when data sources fail, data is stale, or evidence contradicts current hypotheses.
-- **Safety & Human Approval**: Categorizes actions into `read_only`, `low_risk`, and `high_risk`. High-risk actions (e.g. production rollbacks or high-cost procurement) pause execution and require explicit human approval.
-- **Mandatory Post-Action Verification**: Every executed action captures a pre-action baseline and compares post-action state changes. Outcomes are classified as `verified`, `failed`, or `inconclusive`. Failed or inconclusive verification prevents false claims of success.
-- **Lightweight Architecture**: Single-controller backend built with FastAPI and SQLite/in-memory deterministic simulation data; modern React + Vite frontend dashboard. No Redis, Kafka, Kubernetes, vector databases, or multi-agent overhead required.
+- [Hackathon Track & Problem Statement](#hackathon-track--problem-statement)
+- [Target Users](#target-users)
+- [The Solution](#the-solution)
+- [Why Adhyay is Agentic](#why-adhyay-is-agentic)
+- [Customer Resolution Workflow](#customer-resolution-workflow)
+- [System Architecture](#system-architecture)
+  - [Agent Controller](#agent-controller)
+  - [LLM Layer & Fallback](#llm-layer--fallback)
+  - [Customer & Order Data Layer](#customer--order-data-layer)
+  - [Investigation Tools](#investigation-tools)
+  - [Deterministic Policy Engine](#deterministic-policy-engine)
+  - [Real-Time Inventory](#real-time-inventory)
+  - [Customer Resolution Actions](#customer-resolution-actions)
+  - [Permission Gating & Human Approval](#permission-gating--human-approval)
+  - [Post-Action Verification & Anti-False Success](#post-action-verification--anti-false-success)
+  - [Dynamic Adaptation & Safe Escalation](#dynamic-adaptation--safe-escalation)
+  - [Robust Failure Handling](#robust-failure-handling)
+- [Enterprise Frontend Console](#enterprise-frontend-console)
+- [Deterministic Simulation Scenarios](#deterministic-simulation-scenarios)
+- [Local Setup & Running](#local-setup--running)
+- [LLM Configuration](#llm-configuration)
+- [Environment Variables](#environment-variables)
+- [Testing](#testing)
+- [Deployment & Demo Instructions](#deployment--demo-instructions)
+
+---
+
+## Hackathon Track & Problem Statement
+
+- **Track**: Track 3 — Smart Automation
+- **Problem Statement**: Problem Statement 5 (PS5) — Autonomous Customer Resolution Agent
+- **Core Challenge**: Build an agentic system capable of understanding customer resolution goals, retrieving relevant customer, order, policy, and inventory evidence, dynamically choosing resolution paths without hard-coded sequences, executing permitted simulated actions, verifying state changes, adapting under failure/constraints, and escalating safely when resolution cannot be completed automatically.
+
+---
+
+## Target Users
+
+1. **E-Commerce & Enterprise Support Leads**: Need automated, reliable customer issue resolution for refunds, replacements, and cancellations without manual agent overhead.
+2. **Customer Experience (CX) Ops Teams**: Require clear auditability, permission boundaries for high-value financial actions, and zero false-success reporting.
+3. **Automated Operations Auditors**: Need structured evidence, baseline-vs-actual state verification, and safe human-in-the-loop escalation queues.
+
+---
+
+## The Solution
+
+Adhyay bridges the gap between AI reasoning and deterministic business execution. It combines:
+- A **Single-Controller Investigation Engine** that executes an evidence-driven loop.
+- A **16-Tool Read-Only Investigation Suite** for customer profiles, order fulfillment, product catalog, company policies, inventory stock, and system telemetry.
+- An **8-Action Remediation Engine** supporting refunds, replacements, cancellations, escalations, purchase requests, and deployment rollbacks.
+- A **Permission & Verification Boundary** that halts high-risk financial actions for human review and independently validates database state changes.
+- An **Enterprise Dark-Mode React Console** with real-time state binding, a 10-card structured resolution layout, and an 8-stage visual workflow stepper.
+
+---
+
+## Why Adhyay is Agentic
+
+Adhyay satisfies all criteria of an autonomous AI agent:
+
+1. **Goal-Driven Autonomy**: Accepts high-level natural language goals (e.g., *"Customer CUST-801 received defective headphones in order ORD-9001. Resolve the issue."*).
+2. **Dynamic Evidence-Based Path Selection**: Never follows a rigid sequence (`customer → order → policy → inventory → action`). Instead, the agent ranks candidates dynamically based on evidence, policy eligibility, inventory levels, and tool outcomes.
+3. **Environment Perception**: Observes system state changes, inventory counts, policy rules, and tool failures through structured observations.
+4. **State Mutation & Remediation**: Executes actual database mutations (updating order status to `refunded`, `cancelled`, or dispatching replacement units).
+5. **Self-Adaptation**: Automatically pivots strategy when blocked (e.g., switching from replacement to refund when stock is 0, or adapting after a tool outage).
+6. **Self-Verification**: Never assumes an action worked; queries the system post-action and compares against pre-action baselines.
+7. **Permission Boundaries**: Recognizes its own authority limit and pauses execution for human approval when financial thresholds are exceeded.
+
+---
+
+## Customer Resolution Workflow
+
+Adhyay visualizes and executes resolutions through an explicit 8-stage pipeline:
+
+```text
+  ┌──────┐    ┌───────────────┐    ┌──────────┐    ┌──────────┐
+  │ GOAL │ ──►│ INVESTIGATION │ ──►│ EVIDENCE │ ──►│ DECISION │
+  └──────┘    └───────────────┘    └──────────┘    └──────────┘
+                                                        │
+  ┌────────────┐    ┌──────────────┐    ┌─────────┐     │
+  │ RESOLUTION │ ◄──│ VERIFICATION │ ◄──│ ACTION  │ ◄───┘
+  │/ESCALATION │    └──────────────┘    └─────────┘
+  └────────────┘           │                 
+        ▲                  ▼                 
+        └────────────┌────────────┐          
+                     │ ADAPTATION │          
+                     └────────────┘          
+```
 
 ---
 
@@ -25,31 +105,103 @@ User / Dashboard (React + Vite)
        ▼  HTTP REST Polling (/api)
 FastAPI Backend
        │
-       ├──► Agent Controller (Single Investigation Loop)
+       ├──► Agent Controller (Single Investigation Loop & Case State Machine)
        │         │
-       │         ├──► Decision Policy (LLMProvider / EvidenceBasedDecisionProvider)
+       │         ├──► LLM / Decision Layer (Ollama/Groq/vLLM or EvidenceBasedProvider)
        │         │
-       │         ├──► Tool Registry (9 Read-Only Tools)
+       │         ├──► Tool Registry (16 Read-Only Investigation Tools)
        │         │
-       │         └──► Action Registry (4 Action Tools & Verification Engine)
+       │         └──► Action Registry (8 Remediation Actions & Verification Engine)
+       │                   │
+       │                   ├──► Low-Risk Action: Auto-Execute ──► Baseline Capture ──► Verify
+       │                   └──► High-Risk Action: Pause (AWAITING_APPROVAL) ──► Human Review ──► Execute ──► Verify
        │
-       └──► Simulated Company Environment (4 Deterministic Scenarios)
+       └──► Simulated Company Environment (8 Deterministic Scenarios & SQLite/Memory Repository)
 ```
 
+### Agent Controller
+The `AgentController` (`backend/agent/controller.py`) manages session lifecycle, enforces step budgets (`max_steps`), tracks timeouts, and drives `CustomerCase` state transitions:
+`OPEN` $\rightarrow$ `INVESTIGATING` $\rightarrow$ `AWAITING_APPROVAL` $\rightarrow$ `ACTION_IN_PROGRESS` $\rightarrow$ `VERIFYING` $\rightarrow$ `RESOLVED` / `ESCALATED` / `FAILED`.
+
+### LLM Layer & Fallback
+The LLM layer (`backend/llm/`) features a provider-neutral interface supporting Ollama, Groq, vLLM, Together, Fireworks, and custom OpenAI-compatible `/v1` endpoints. If credentials are unconfigured or an endpoint is unreachable, Adhyay automatically logs the fallback and runs seamlessly using the local `EvidenceBasedDecisionProvider`.
+
+### Customer & Order Data Layer
+Deterministic models (`backend/models/customer.py`) maintain customer profiles (`Customer`) with tiers (`VIP`, `Standard`, `Gold`), order counts, and spend history, alongside individual customer orders (`CustomerOrder`) tracking fulfillment status, refund state, replacement state, and cancellation state.
+
+### Investigation Tools
+16 registered read-only tools (`backend/tools/`):
+- **Customer Tools**: `get_customer`, `get_order`, `get_customer_orders`, `get_product_details`, `get_policy`, `check_customer_resolution_eligibility`, `get_customer_inventory`.
+- **Operational Tools**: `get_revenue_metrics`, `get_order_metrics`, `get_product_sales`, `get_inventory_status`, `get_supplier_status`, `get_payment_status`, `get_service_health`, `get_recent_deployments`, `get_system_logs`.
+
+### Deterministic Policy Engine
+`GetPolicyTool` and `CheckResolutionEligibilityTool` enforce local policies:
+- **Refund Policy**: Max auto-refund ₹5,000; returns allowed within 14 days; VIP fast-tracking enabled.
+- **Replacement Policy**: Requires available inventory (`on_hand - reserved > 0`); 30-day replacement window.
+- **Cancellation Policy**: Auto-cancellation allowed for `processing`/`pending` orders; forbidden post-dispatch (`shipped`/`delivered`).
+
+### Real-Time Inventory
+`GetCustomerInventoryTool` queries stock levels (`on_hand`, `reserved`, `available_for_replacement`) to verify unit availability prior to dispatching replacements.
+
+### Customer Resolution Actions
+8 registered state-changing actions (`backend/tools/actions.py`):
+- **Customer Actions**: `issue_refund`, `create_replacement`, `cancel_order`, `escalate_customer_case`.
+- **Operational Actions**: `create_purchase_request`, `rollback_deployment`, `create_support_ticket`, `request_human_approval`.
+
+### Permission Gating & Human Approval
+Actions are categorized by risk:
+- **Low-Risk**: Executed automatically (e.g. refunds < ₹5,000, replacement dispatch, cancellations).
+- **High-Risk**: High-value financial refunds ($\ge \text{₹}5,000$) or production rollbacks. The controller pauses execution, sets status to `AWAITING_APPROVAL`, and awaits human approval (`POST /api/runs/{id}/approval`).
+
+### Post-Action Verification & Anti-False Success
+Every executed action undergoes mandatory verification:
+1. `capture_baseline`: Captures state prior to action execution.
+2. `execute`: Mutates simulated database state.
+3. `verify`: Re-queries system state and compares against baseline.
+- **CRITICAL RULE**: A case is marked `RESOLVED` **ONLY IF** objective is completed, expected state changed, and verification status is `verified`. If verification is `failed` or `inconclusive`, status becomes `FAILED` with `unresolved_issues`.
+
+### Dynamic Adaptation & Safe Escalation
+- **Stockout Adaptation**: If replacement stock is 0, the agent automatically pivots to evaluate refund eligibility.
+- **Post-Dispatch Policy Restriction**: If cancellation is requested for a shipped order, the agent executes `escalate_customer_case` to safely route the case to a human logistics agent.
+
+### Robust Failure Handling
+Adhyay gracefully handles missing customers, missing orders, empty/invalid goals, tool timeouts, tool outages, malformed LLM responses, and unverified actions without crashing, hallucinating, or claiming false success.
+
 ---
 
-## Demo Scenarios
+## Enterprise Frontend Console
 
-Adhyay includes four reproducible, deterministic simulation scenarios:
+The React + Vite dashboard (`frontend/src/app.tsx`) provides an enterprise dark-mode resolution console with 10 main screen section cards:
 
-1. **Inventory & Supplier Failure (`inventory_supplier_failure`)**: Best-selling product is out of stock due to a delayed supplier shipment. Tool outage occurs on initial inventory check; agent recovers, checks system logs and supplier status, and proposes replenishment.
-2. **Payment Failure (`payment_failure`)**: Payment gateway timeout surge causes checkout payment drops. Agent analyzes payment metrics and service health to isolate the gateway incident.
-3. **Deployment Service Failure (`deployment_service_failure`)**: Checkout deployment `DEP-502` introduces error surge. Agent detects degradation from logs and service metrics, proposes `rollback_deployment` (high-risk), pauses for human approval, executes rollback upon approval, and verifies service health returns to `healthy`.
-4. **Misleading Initial Hypothesis (`misleading_initial_hypothesis`)**: Low inventory initially looks suspicious, but support tickets and pricing logs point to a shipping-fee configuration update `DEP-503`. Agent avoids false inventory conclusions.
+1. **CUSTOMER CASE**: Case ID, customer name/ID, tier badge, reported issue, requested resolution, status badge.
+2. **CUSTOMER PROFILE**: Profile details, contact email, tier, total orders, total spent in ₹, history summary.
+3. **ORDER DETAILS**: Order ID, product details, price, order status, fulfillment status, resolution state matrix.
+4. **POLICY & ELIGIBILITY**: Resolution policies, eligibility evaluation result, approval rules, constraint blocks.
+5. **INVENTORY AVAILABILITY**: Product ID, stock on hand, reserved units, available replacement count, in-stock indicator.
+6. **AGENT ACTIVITY LOG**: Chronological tool calls timeline, concise tool outputs, failure events, strategy adaptation logs.
+7. **DECISION ENGINE**: Current objective, hypothesis, selected remediation path, decision rationale.
+8. **REMEDIATION ACTION & APPROVAL**: Action name, permission level badge, human approval request box with `Approve`/`Reject` buttons when awaiting approval.
+9. **POST-ACTION VERIFICATION**: Pre-action baseline vs post-action state diff comparison, verification outcome badge (`VERIFIED`/`FAILED`/`INCONCLUSIVE`), outcome details.
+10. **FINAL CASE RESOLUTION**: Terminal status badge (`RESOLVED`/`ESCALATED`/`FAILED`), resolution conclusion summary, unresolved issues list.
 
 ---
 
-## Setup & Running Locally
+## Deterministic Simulation Scenarios
+
+Adhyay includes 8 reproducible simulation scenarios (4 PS5 Customer Resolution + 4 Operational):
+
+1. **Damaged Product Replacement Available (`customer_damaged_replacement_available`)**: Replacement requested for defective item; inventory in stock; replacement executed and verified $\rightarrow$ `RESOLVED`.
+2. **Replacement Stockout Adapts to Refund (`customer_replacement_out_of_stock_adapts_refund`)**: Replacement requested; stock is 0; agent adapts to refund eligibility; refund executed and verified $\rightarrow$ `RESOLVED`.
+3. **Post-Dispatch Cancellation Policy Escalation (`customer_refund_denied_policy_escalation`)**: Shipped order cancellation requested; policy forbids auto-cancellation post-dispatch; agent executes `escalate_customer_case` $\rightarrow$ `ESCALATED`.
+4. **Investigation Tool Failure Adaptation (`customer_investigation_tool_failure_adapts`)**: `get_customer_inventory` tool failure injected; agent detects error, adapts path, completes safely.
+5. **Inventory & Supplier Failure (`inventory_supplier_failure`)**: Operational supplier delay stockout.
+6. **Payment Failure (`payment_failure`)**: Operational payment gateway timeout surge.
+7. **Deployment Service Failure (`deployment_service_failure`)**: Operational release error spike requiring high-risk rollback approval.
+8. **Misleading Initial Hypothesis (`misleading_initial_hypothesis`)**: Operational shipping-fee pricing configuration anomaly.
+
+---
+
+## Local Setup & Running
 
 ### Prerequisites
 - Python 3.11+
@@ -87,23 +239,35 @@ Open `http://localhost:5173` in your browser.
 
 ---
 
+## LLM Configuration
+
+Adhyay runs completely out-of-the-box in deterministic rule-based mode without requiring any LLM API keys.
+
+To connect an LLM endpoint, set environment variables in `.env` or configure runtime credentials interactively in the web dashboard's **LLM Settings** panel:
+
+- **Ollama (Local)**: `LLM_PROVIDER=ollama`, `LLM_MODEL=llama3.1`, `LLM_BASE_URL=http://localhost:11434/v1`
+- **Groq Cloud**: `LLM_PROVIDER=groq`, `LLM_API_KEY=gsk_...`, `LLM_MODEL=llama-3.3-70b-versatile`
+- **vLLM / LM Studio / OpenAI-compatible**: `LLM_PROVIDER=vllm`, `LLM_BASE_URL=http://localhost:8000/v1`
+
+---
+
 ## Environment Variables
 
 | Variable | Purpose | Default |
 | :--- | :--- | :--- |
-| `LLM_PROVIDER` | `ollama`, `vllm`, `lmstudio`, `llamacpp`, `groq`, `together`, `fireworks`, or blank for the deterministic rule-based fallback | `""` |
-| `LLM_API_KEY` | Credential for the LLM endpoint (never exposed in UI or logs). Local servers like Ollama ignore the value but still require it to be non-empty | `""` |
-| `LLM_MODEL` | Model identifier the endpoint should run (e.g. `llama3.1`, `llama-3.3-70b-versatile`) | `""` |
-| `LLM_BASE_URL` | Explicit OpenAI-compatible `/v1` base URL; overrides `LLM_PROVIDER`'s built-in default | `""` |
+| `LLM_PROVIDER` | `ollama`, `vllm`, `lmstudio`, `groq`, `together`, `fireworks`, or blank for deterministic mode | `""` |
+| `LLM_API_KEY` | Credential for LLM endpoint (never exposed in UI or logs) | `""` |
+| `LLM_MODEL` | Model identifier (e.g. `llama3.1`, `llama-3.3-70b-versatile`) | `""` |
+| `LLM_BASE_URL` | Explicit OpenAI-compatible `/v1` base URL | `""` |
 | `APP_ENV` | Runtime environment label | `development` |
-| `APP_HOST` / `APP_PORT` | Local API bind address and port (`$PORT` is honored automatically when set by a host) | `127.0.0.1:8000` |
+| `APP_HOST` / `APP_PORT` | Local API bind address and port | `127.0.0.1:8000` |
 | `CORS_ORIGINS` | Permitted browser origins | `http://localhost:5173` |
 
 ---
 
 ## Testing
 
-Run the complete backend unit test suite (68 tests covering tools, LLM abstraction, agent controller, adaptation, actions, verification, REST API, demo scenarios, and robustness):
+Run the complete backend unit, integration, and robustness test suite (**140 tests**):
 
 ```powershell
 python -m unittest discover tests
@@ -118,60 +282,22 @@ npm run build
 
 ---
 
-## Single-Command Production Serving
+## Deployment & Demo Instructions
 
-If the frontend is built (`frontend/dist` exists), FastAPI automatically mounts the static dashboard, allowing single-process execution:
+### Single-Command Production Serving
+If `frontend/dist` exists, FastAPI automatically mounts the static dashboard:
 
 ```powershell
 uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
-Access the complete dashboard directly at `http://127.0.0.1:8000`.
+Access the complete application directly at `http://127.0.0.1:8000`.
 
----
-
-## Deployment
-
-The app is one FastAPI process serving both the API and the built frontend, so it deploys
-anywhere that can run a container or a Python web process.
-
-### Docker (recommended — any host)
+### Docker Deployment
 
 ```bash
 docker build -t adhyay .
 docker run -p 8000:8000 --env-file .env adhyay
 ```
-The image builds the frontend and backend together and binds `0.0.0.0:$PORT` automatically.
 
-### Render / Railway / Fly.io
-
-- `render.yaml` is included for a one-click Render deployment (`New +` → `Blueprint`).
-- Any host that reads a `Procfile` (Railway, Heroku-style platforms) can use the included one directly.
-- Set `LLM_PROVIDER` / `LLM_API_KEY` / `LLM_MODEL` / `LLM_BASE_URL` as environment variables
-  in the host's dashboard — never commit them.
-
-### Local open-weight model for the live demo
-
-For a fully offline, no-API-key demo brain, run an open-weight model locally with
-[Ollama](https://ollama.com) and point the app at it:
-
-```bash
-ollama pull llama3.1
-ollama serve   # usually already running as a background service
-```
-Then in `.env`:
-```
-LLM_PROVIDER=ollama
-LLM_API_KEY=ollama
-LLM_MODEL=llama3.1
-```
-No `LLM_BASE_URL` is needed — it defaults to `http://localhost:11434/v1`.
-
-### Known limitation: single in-memory run store
-
-Investigation state lives in memory in the API process (`_RUNS` in `backend/api/runs.py`),
-not in a database. This keeps the demo simple and avoids the SQLite concurrency issues that
-would otherwise come with multi-worker deployment, but it also means: runs don't survive a
-process restart, and you should deploy with a single worker/instance. If a free-tier host
-spins down on inactivity, treat the hosted URL as a backup/browsable link and drive live
-demos from a local `uvicorn` process instead — the first request after a cold start can take
-20–30 seconds, which is worth avoiding live.
+### Known Limitation: Single In-Memory Run Store
+Run state is stored in memory (`_RUNS` in `backend/api/runs.py`) to maintain thread safety and avoid database lock contention during fast demo polling. Deploy with a single instance/worker for hackathon presentations.

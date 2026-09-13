@@ -7,7 +7,15 @@ from pydantic import ValidationError
 from backend.data.database import SimulatedCompanyRepository
 from backend.models.tools import ToolCall, ToolMetadata, ToolResult
 from backend.tools.analytics import OrderMetricsTool, ProductSalesTool, RevenueMetricsTool
-from backend.tools.base import ReadOnlyTool
+from backend.tools.customer import (
+    CheckResolutionEligibilityTool,
+    GetCustomerInventoryTool,
+    GetCustomerOrdersTool,
+    GetCustomerTool,
+    GetOrderTool,
+    GetPolicyTool,
+    GetProductDetailsTool,
+)
 from backend.tools.inventory import InventoryStatusTool
 from backend.tools.payments import PaymentStatusTool
 from backend.tools.suppliers import SupplierStatusTool
@@ -22,9 +30,13 @@ class ToolRegistry:
             RevenueMetricsTool(), OrderMetricsTool(), ProductSalesTool(), InventoryStatusTool(),
             SupplierStatusTool(), PaymentStatusTool(), ServiceHealthTool(), RecentDeploymentsTool(),
             SystemLogsTool(),
+            # PS5 Customer Investigation Tools
+            GetCustomerTool(), GetOrderTool(), GetCustomerOrdersTool(), GetProductDetailsTool(),
+            GetPolicyTool(), CheckResolutionEligibilityTool(), GetCustomerInventoryTool(),
         ]
         self._repository = repository
         self._tools = {tool.name: tool for tool in tools}
+
 
     @property
     def names(self) -> tuple[str, ...]:

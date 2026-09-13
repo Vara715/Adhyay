@@ -152,3 +152,52 @@ def build_llm_provider(settings) -> LLMProvider:
         )
     api_key = settings.llm_api_key.get_secret_value() if settings.llm_api_key else ""
     return OpenAICompatibleProvider(base_url=base_url, api_key=api_key)
+
+
+def test_llm_provider_connection(settings) -> tuple[bool, str]:
+    """Test reachability and validity of configured LLM provider without exposing secrets."""
+    if not settings.llm_is_configured:
+        return False, "LLM settings incomplete. Provider, model, and API key are required."
+
+    try:
+        provider = build_llm_provider(settings)
+    except LLMProviderError as err:
+        return False, str(err)
+
+    if not isinstance(provider, OpenAICompatibleProvider):
+        return True, "Provider configured."
+
+    base_url = provider._base_url
+    headers = {"Content-Type": "application/json"}
+    if provider._api_key:
+        headers["Authorization"] = f"Bearer {provider._api_key}"
+
+    try:
+        with httpx.Client(timeout=5.0) as client:
+            resp = client.get(f"{base_url}/models", headers=headers)
+            if resp.status_code in (200, 201):
+                return True, f"Successfully connected to {base_url}"
+            if resp.status_code in (401, 403):
+                return False, f"Authentication failed (HTTP {resp.status_code}). Check API key."
+
+            payload = {
+                "model": settings.llm_model,
+                "messages": [{"role": "user", "content": "ping"}],
+                "max_tokens": 1,
+            }
+            resp_chat = client.post(f"{base_url}/chat/completions", json=payload, headers=headers)
+            if resp_chat.status_code in (200, 201):
+                return True, f"Successfully verified connection to model '{settings.llm_model}'"
+            elif resp_chat.status_code in (401, 403):
+                return False, f"Authentication failed (HTTP {resp_chat.status_code}). Check API key."
+            elif resp_chat.status_code == 404:
+                return False, f"Endpoint or model not found (HTTP 404) at {base_url}."
+            else:
+                return False, f"LLM server returned status code {resp_chat.status_code}."
+    except httpx.ConnectError:
+        return False, f"Could not connect to LLM server at {base_url}. Ensure the server is running."
+    except httpx.TimeoutException:
+        return False, f"Connection to LLM server timed out at {base_url}."
+    except Exception as exc:
+        return False, f"LLM connection error: {type(exc).__name__}"
+

@@ -28,6 +28,11 @@ class CreateRunRequest(BaseModel):
     scenario: str = Field(default="inventory_supplier_failure")
     approval_threshold_inr: Decimal = Field(default=Decimal("50000"))
     step_delay_seconds: float = Field(default=0.5, ge=0.0, le=5.0)
+    auto_start: bool = Field(default=True)
+
+
+class StartRunRequest(BaseModel):
+    step_delay_seconds: float = Field(default=0.6, ge=0.0, le=5.0)
 
 
 class ApprovalDecisionRequest(BaseModel):
@@ -35,10 +40,14 @@ class ApprovalDecisionRequest(BaseModel):
     step_delay_seconds: float = Field(default=0.5, ge=0.0, le=5.0)
 
 
+from backend.models.agent import CustomerCase
+
+
 class ScenarioInfo(BaseModel):
     key: str
     name: str
     description: str
+    customer_case: CustomerCase | None = None
 
 
 router = APIRouter(prefix="", tags=["investigations"])
@@ -80,12 +89,25 @@ def _create_controller(scenario_key: str, threshold: Decimal) -> tuple[AgentCont
 def list_scenarios() -> list[ScenarioInfo]:
     """Return available deterministic simulation scenarios."""
     return [
-        ScenarioInfo(key=sc.key, name=sc.name, description=sc.description)
+        ScenarioInfo(
+            key=sc.key,
+            name=sc.name,
+            description=sc.description,
+            customer_case=_build_customer_case(sc.key),
+        )
         for sc in SCENARIOS.values()
     ]
 
 
-from backend.models.agent import CustomerCase
+@router.get("/runs", response_model=list[AgentState])
+def list_runs() -> list[AgentState]:
+    """Retrieve all current/past investigation run states."""
+    runs_list = []
+    for _, state, lock in _RUNS.values():
+        with lock:
+            runs_list.append(state.model_copy(deep=True))
+    return runs_list
+
 
 
 def _build_customer_case(scenario_key: str) -> CustomerCase:
@@ -95,28 +117,68 @@ def _build_customer_case(scenario_key: str) -> CustomerCase:
             issue="Customer unable to complete checkout after release.",
             impact="HIGH",
             affected_service="Checkout Service",
-            status="INVESTIGATING",
+            status="OPEN",
         ),
         "inventory_supplier_failure": CustomerCase(
             case_id="CS-10390",
             issue="Best-seller stockout due to delayed supplier shipment.",
             impact="HIGH",
             affected_service="Inventory & Order Fulfillment",
-            status="INVESTIGATING",
+            status="OPEN",
         ),
         "payment_failure": CustomerCase(
             case_id="CS-10415",
             issue="Payment gateway timeout surge during transaction.",
             impact="HIGH",
             affected_service="Payment Gateway",
-            status="INVESTIGATING",
+            status="OPEN",
         ),
         "misleading_initial_hypothesis": CustomerCase(
             case_id="CS-10450",
             issue="Shipping fee spike causing elevated cart abandonment.",
             impact="MEDIUM",
             affected_service="Pricing & Shipping Service",
-            status="INVESTIGATING",
+            status="OPEN",
+        ),
+        "customer_damaged_replacement_available": CustomerCase(
+            case_id="CASE-ORD-9002",
+            customer_id="CUST-801",
+            order_id="ORD-9002",
+            issue="Package arrived damaged during transit. Item replacement requested.",
+            requested_resolution="replacement",
+            impact="HIGH",
+            affected_service="Customer Order Fulfillment",
+            status="OPEN",
+        ),
+        "customer_replacement_out_of_stock_adapts_refund": CustomerCase(
+            case_id="CASE-ORD-9003",
+            customer_id="CUST-802",
+            order_id="ORD-9003",
+            issue="Replacement requested for defective item, but replacement stock is unavailable.",
+            requested_resolution="replacement",
+            impact="HIGH",
+            affected_service="Customer Inventory & Refund Policy",
+            status="OPEN",
+        ),
+        "customer_refund_denied_policy_escalation": CustomerCase(
+            case_id="CASE-ORD-9004",
+            customer_id="CUST-803",
+            order_id="ORD-9004",
+            issue="Cancellation requested for shipped order. Post-dispatch cancellation forbidden by policy.",
+            requested_resolution="cancellation",
+            impact="HIGH",
+            affected_service="Order Logistics & Policy Enforcement",
+            status="OPEN",
+        ),
+        "customer_investigation_tool_failure_adapts": CustomerCase(
+            case_id="CASE-ORD-9001",
+            customer_id="CUST-801",
+            order_id="ORD-9001",
+            issue="Customer reported defective headphones; resolution tool service timeout.",
+            requested_resolution="replacement",
+            impact="HIGH",
+            affected_service="Customer Resolution System",
+            status="OPEN",
         ),
     }
     return cases.get(
@@ -126,14 +188,14 @@ def _build_customer_case(scenario_key: str) -> CustomerCase:
             issue="Reported operational anomaly.",
             impact="MEDIUM",
             affected_service="Core Platform",
-            status="INVESTIGATING",
+            status="OPEN",
         ),
     )
 
 
 @router.post("/runs", response_model=AgentState)
 def start_run(request: CreateRunRequest) -> AgentState:
-    """Start a new agent investigation run."""
+    """Start a new agent investigation run or create a case in OPEN status."""
     if not isinstance(request.goal, str) or not request.goal.strip():
         raise HTTPException(status_code=400, detail="Provide a non-empty operational investigation goal.")
     if request.scenario not in SCENARIOS:
@@ -141,26 +203,68 @@ def start_run(request: CreateRunRequest) -> AgentState:
 
     controller, _ = _create_controller(request.scenario, request.approval_threshold_inr)
     customer_case = _build_customer_case(request.scenario)
+    if request.goal and request.goal.strip():
+        user_goal = request.goal.strip()
+        customer_case.original_goal = user_goal
+        customer_case.issue = user_goal
+        goal_lower = user_goal.lower()
+        if "refund" in goal_lower or "money back" in goal_lower or "return" in goal_lower:
+            customer_case.requested_resolution = "refund"
+        elif "cancel" in goal_lower or "cancellation" in goal_lower:
+            customer_case.requested_resolution = "cancellation"
+        elif "replace" in goal_lower or "replacement" in goal_lower:
+            customer_case.requested_resolution = "replacement"
+        else:
+            customer_case.requested_resolution = None
     lock = threading.RLock()
 
-    if request.step_delay_seconds > 0:
-        from backend.agent.events import record_event
-        state = AgentState(original_goal=request.goal.strip(), customer_case=customer_case)
-        record_event(state, "decision", f"Investigation initialized for goal: {state.original_goal}")
+    from backend.agent.events import record_event
+    state = AgentState(original_goal=request.goal.strip(), customer_case=customer_case)
+    record_event(state, "decision", f"Case created for goal: {state.original_goal}. Status: OPEN.")
+    _RUNS[state.run_id] = (controller, state, lock)
+
+    if request.auto_start:
+        if request.step_delay_seconds > 0:
+            def worker():
+                controller._run_loop(state, monotonic(), step_delay=request.step_delay_seconds, lock=lock)
+
+            thread = threading.Thread(target=worker, daemon=True)
+            thread.start()
+            with lock:
+                return state.model_copy(deep=True)
+
+        state = controller.run(request.goal, step_delay=0.0, lock=lock, customer_case=customer_case)
         _RUNS[state.run_id] = (controller, state, lock)
+        return state
+
+    with lock:
+        return state.model_copy(deep=True)
+
+
+@router.post("/runs/{run_id}/start", response_model=AgentState)
+def start_existing_run(run_id: str, request: StartRunRequest | None = None) -> AgentState:
+    """Start execution for an existing open run."""
+    if run_id not in _RUNS:
+        raise HTTPException(status_code=404, detail=f"Run '{run_id}' not found.")
+    controller, state, lock = _RUNS[run_id]
+    with lock:
+        if state.status in ("completed", "failed", "timed_out", "step_limit_reached"):
+            raise HTTPException(status_code=400, detail=f"Run '{run_id}' has already finished with status '{state.status}'.")
+
+        step_delay = request.step_delay_seconds if request else 0.6
+        state.status = "running"
+        if state.customer_case and state.customer_case.status == "OPEN":
+            state.customer_case.status = "INVESTIGATING"
+
+        from backend.agent.events import record_event
+        record_event(state, "decision", f"Autonomous investigation started for goal: {state.original_goal}")
 
         def worker():
-            controller._run_loop(state, monotonic(), step_delay=request.step_delay_seconds, lock=lock)
+            controller._run_loop(state, monotonic(), step_delay=step_delay, lock=lock)
 
         thread = threading.Thread(target=worker, daemon=True)
         thread.start()
-        with lock:
-            return state.model_copy(deep=True)
-
-    state = controller.run(request.goal, step_delay=0.0, lock=lock)
-    state.customer_case = customer_case
-    _RUNS[state.run_id] = (controller, state, lock)
-    return state
+        return state.model_copy(deep=True)
 
 
 @router.get("/runs/{run_id}", response_model=AgentState)

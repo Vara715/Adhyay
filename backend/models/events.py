@@ -7,6 +7,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 EventType = Literal[
     "decision",
+    "llm_decision",
     "tool_call",
     "tool_result",
     "tool_error",
